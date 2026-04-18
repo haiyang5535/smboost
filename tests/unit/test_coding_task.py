@@ -44,3 +44,59 @@ def test_verify_node_calls_llm_and_returns_content():
     fn = tg.get_node_fn("verify")
     result = fn(_make_state(step_outputs=[step]), mock_llm)
     assert "PASS" in result
+
+
+import pytest
+
+@pytest.mark.parametrize("level,expected_shorter", [
+    (1, True),
+    (2, True),
+    (3, True),
+])
+def test_plan_prompt_shrinks_with_level(level, expected_shorter):
+    tg = CodingTaskGraph()
+    mock_llm = MagicMock()
+    captured = []
+    mock_llm.invoke.side_effect = lambda msgs: (
+        captured.append(msgs[0].content) or MagicMock(content="plan")
+    )
+
+    state_l0 = _make_state()
+    state_ln = {**_make_state(), "shrinkage_level": level}
+
+    tg.get_node_fn("plan")(state_l0, mock_llm)
+    prompt_l0 = captured[0]
+    captured.clear()
+
+    tg.get_node_fn("plan")(state_ln, mock_llm)
+    prompt_ln = captured[0]
+
+    assert len(prompt_ln) < len(prompt_l0)
+
+
+@pytest.mark.parametrize("level,expected_shorter", [
+    (1, True),
+    (2, True),
+    (3, True),
+])
+def test_verify_prompt_shrinks_with_level(level, expected_shorter):
+    from smboost.harness.state import StepOutput
+    step = StepOutput(node="execute", model="qwen3.5:2b", output="output", confidence=1.0, passed=True)
+    tg = CodingTaskGraph()
+    mock_llm = MagicMock()
+    captured = []
+    mock_llm.invoke.side_effect = lambda msgs: (
+        captured.append(msgs[0].content) or MagicMock(content="PASS")
+    )
+
+    state_l0 = _make_state(step_outputs=[step])
+    state_ln = {**_make_state(step_outputs=[step]), "shrinkage_level": level}
+
+    tg.get_node_fn("verify")(state_l0, mock_llm)
+    prompt_l0 = captured[0]
+    captured.clear()
+
+    tg.get_node_fn("verify")(state_ln, mock_llm)
+    prompt_ln = captured[0]
+
+    assert len(prompt_ln) < len(prompt_l0)
