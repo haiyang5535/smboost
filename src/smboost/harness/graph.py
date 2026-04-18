@@ -6,6 +6,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
 from smboost.harness.state import HarnessState, StepOutput
+from smboost.scorer import RobustnessScorer
 
 if TYPE_CHECKING:
     from smboost.invariants.suite import InvariantSuite
@@ -18,10 +19,12 @@ class HarnessGraph:
         task_graph: TaskGraph,
         invariant_suite: InvariantSuite,
         max_retries: int = 3,
+        scorer: RobustnessScorer | None = None,
     ):
         self._task_graph = task_graph
         self._suite = invariant_suite
         self._max_retries = max_retries
+        self._scorer = scorer or RobustnessScorer()
         self._compiled = self._build()
 
     def _build(self):
@@ -39,6 +42,7 @@ class HarnessGraph:
         retry_count = state["retry_count"]
         fallback_index = state["fallback_index"]
         current_model = state["model"]
+        shrinkage_level = state["shrinkage_level"]
 
         if retry_count >= self._max_retries:
             next_fi = fallback_index + 1
@@ -47,6 +51,7 @@ class HarnessGraph:
             fallback_index = next_fi
             current_model = state["fallback_chain"][fallback_index]
             retry_count = 0
+            shrinkage_level = 0
 
         node_name = self._task_graph.node_names[state["current_node_index"]]
         entry_invs, exit_invs = self._suite.node_invariants.get(node_name, ([], []))
@@ -69,23 +74,51 @@ class HarnessGraph:
             node_exception = str(exc)
 
         passed = node_exception is None and all(inv(state, output) for inv in exit_invs)
-        step = StepOutput(
-            node=node_name,
-            model=current_model,
-            output=output,
-            confidence=1.0,
-            passed=passed,
-        )
 
         if not passed:
+            best_output, confidence = self._scorer.score(node_fn, state, llm)
+            step = StepOutput(
+                node=node_name,
+                model=current_model,
+                output=best_output,
+                confidence=confidence,
+                passed=False,
+            )
+            new_shrinkage = shrinkage_level + (1 if confidence < self._scorer.threshold else 0)
+
+            if new_shrinkage > 3:
+                next_fi = fallback_index + 1
+                if next_fi >= len(state["fallback_chain"]):
+                    return {
+                        "step_outputs": state["step_outputs"] + [step],
+                        "status": "failed",
+                        "model": current_model,
+                    }
+                return {
+                    "step_outputs": state["step_outputs"] + [step],
+                    "retry_count": 0,
+                    "model": state["fallback_chain"][next_fi],
+                    "fallback_index": next_fi,
+                    "shrinkage_level": 0,
+                    "status": "running",
+                }
+
             return {
                 "step_outputs": state["step_outputs"] + [step],
                 "retry_count": retry_count + 1,
                 "model": current_model,
                 "fallback_index": fallback_index,
+                "shrinkage_level": new_shrinkage,
                 "status": "running",
             }
 
+        step = StepOutput(
+            node=node_name,
+            model=current_model,
+            output=output,
+            confidence=1.0,
+            passed=True,
+        )
         next_index = state["current_node_index"] + 1
         is_done = next_index >= len(self._task_graph.node_names)
         return {
@@ -95,6 +128,7 @@ class HarnessGraph:
             "final_output": output,
             "model": current_model,
             "fallback_index": fallback_index,
+            "shrinkage_level": 0,
             "status": "success" if is_done else "running",
         }
 
