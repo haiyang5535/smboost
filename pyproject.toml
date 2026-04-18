@@ -13,6 +13,9 @@ dev = [
     "pytest>=8.0",
     "pytest-mock>=3.14",
 ]
+benchmark = [
+    "human-eval>=1.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -25,3 +28,4 @@ packages = ["src/smboost"]
 testpaths = ["tests"]
 markers = ["integration: requires running Ollama with qwen3.5:2b pulled"]
 addopts = "-m 'not integration'"
+pythonpath = ["."]

@@ -17,3 +17,4 @@ build/
 *.egg
 .DS_Store
 **/.DS_Store
+benchmarks/results/

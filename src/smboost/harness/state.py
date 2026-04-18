@@ -20,5 +20,6 @@ class HarnessState(TypedDict):
     retry_count: int
     fallback_index: int
     current_node_index: int
+    shrinkage_level: int
     status: Literal["running", "success", "failed"]
     final_output: str | None

@@ -37,34 +37,65 @@ def run_shell(command: str) -> str:
     return result.stdout + result.stderr
 
 
-_TOOLS = [read_file, write_file, run_shell]
-_TOOL_MAP = {t.name: t for t in _TOOLS}
+_TOOLS_FULL = [read_file, write_file, run_shell]
+_TOOLS_REDUCED = [write_file, run_shell]  # shrinkage level 1+: drop read_file
+_TOOL_MAP_FULL = {t.name: t for t in _TOOLS_FULL}
+_TOOL_MAP_REDUCED = {t.name: t for t in _TOOLS_REDUCED}
 
 
 def _plan_node(state: HarnessState, llm: ChatOllama) -> str:
-    prompt = (
-        f"You are a coding agent. Create a step-by-step plan to complete this task:\n\n"
-        f"{state['task']}\n\nRespond with a numbered list of concrete steps."
-    )
+    level = state["shrinkage_level"]
+    task = state["task"]
+    if level == 0:
+        prompt = (
+            f"You are a coding agent. Create a step-by-step plan to complete this task:\n\n"
+            f"{task}\n\nRespond with a numbered list of concrete steps."
+        )
+    elif level == 1:
+        prompt = f"Create a step-by-step plan:\n\n{task}"
+    elif level == 2:
+        prompt = f"List the steps to complete: {task}"
+    else:
+        prompt = f"Plan: {task[:300]}"
     return llm.invoke([HumanMessage(content=prompt)]).content or ""
 
 
 def _execute_node(state: HarnessState, llm: ChatOllama) -> str:
+    level = state["shrinkage_level"]
     plan = state["step_outputs"][-1].output if state["step_outputs"] else ""
-    prompt = (
-        f"Execute this coding task using your tools.\n\n"
-        f"Task: {state['task']}\n\nPlan:\n{plan}"
-    )
-    return run_tool_loop(llm.bind_tools(_TOOLS), [HumanMessage(content=prompt)], _TOOL_MAP)
+    task = state["task"]
+    tools = _TOOLS_FULL if level == 0 else _TOOLS_REDUCED
+    tool_map = _TOOL_MAP_FULL if level == 0 else _TOOL_MAP_REDUCED
+    if level == 0:
+        prompt = (
+            f"Execute this coding task using your tools.\n\n"
+            f"Task: {task}\n\nPlan:\n{plan}"
+        )
+    elif level == 1:
+        prompt = f"Execute: {task}\n\nSteps: {plan}"
+    elif level == 2:
+        prompt = f"Execute this task: {task}"
+    else:
+        prompt = f"Do: {task[:300]}"
+    return run_tool_loop(llm.bind_tools(tools), [HumanMessage(content=prompt)], tool_map)
 
 
 def _verify_node(state: HarnessState, llm: ChatOllama) -> str:
+    level = state["shrinkage_level"]
     last_output = state["step_outputs"][-1].output if state["step_outputs"] else ""
-    prompt = (
-        f"Verify this coding task was completed correctly.\n\n"
-        f"Task: {state['task']}\n\nExecution output:\n{last_output}\n\n"
-        f"Respond with PASS or FAIL followed by a brief reason."
-    )
+    task = state["task"]
+    if level == 0:
+        prompt = (
+            f"Verify this coding task was completed correctly.\n\n"
+            f"Task: {task}\n\nExecution output:\n{last_output}\n\n"
+            f"Respond with PASS or FAIL followed by a brief reason."
+        )
+    elif level == 1:
+        prompt = f"Verify task completed:\n\nTask: {task}\nOutput: {last_output}\n\nPASS or FAIL?"
+    elif level == 2:
+        prompt = f"Did this work? Task: {task[:200]}\nOutput: {last_output[:300]}\nPASS or FAIL."
+    else:
+        prompt = f"PASS or FAIL: {task[:100]}"
     return llm.invoke([HumanMessage(content=prompt)]).content or ""
 
 
