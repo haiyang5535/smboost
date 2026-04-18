@@ -1,0 +1,59 @@
+from __future__ import annotations
+import json
+from typing import Callable
+
+from smboost.harness.state import HarnessState
+
+InvariantFn = Callable[[HarnessState, str | None], bool]
+
+_ERROR_MARKERS = ("Error:", "Traceback", "Exception:")
+
+
+def output_is_nonempty(state: HarnessState, output: str | None) -> bool:
+    if output is None:
+        return True
+    return len(output.strip()) > 0
+
+
+def output_is_valid_json(state: HarnessState, output: str | None) -> bool:
+    if output is None:
+        return True
+    try:
+        json.loads(output)
+        return True
+    except (json.JSONDecodeError, TypeError):
+        return False
+
+
+def no_error_keywords(state: HarnessState, output: str | None) -> bool:
+    if output is None:
+        return True
+    return not any(marker in output for marker in _ERROR_MARKERS)
+
+
+def verify_says_pass(state: "HarnessState", output: str | None) -> bool:
+    return output is not None and output.upper().startswith("PASS")
+
+
+class InvariantSuite:
+    def __init__(
+        self,
+        node_invariants: dict[str, tuple[list[InvariantFn], list[InvariantFn]]],
+    ):
+        self.node_invariants = node_invariants
+
+    @staticmethod
+    def coding_agent() -> InvariantSuite:
+        return InvariantSuite({
+            "plan":    ([], [output_is_nonempty]),
+            "execute": ([], [output_is_nonempty, no_error_keywords]),
+            "verify":  ([], [output_is_nonempty, verify_says_pass]),
+        })
+
+    @staticmethod
+    def tool_calling() -> InvariantSuite:
+        return InvariantSuite({
+            "plan":     ([], [output_is_nonempty]),
+            "dispatch": ([], [output_is_nonempty]),
+            "verify":   ([], [output_is_nonempty, verify_says_pass]),
+        })

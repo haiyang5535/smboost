@@ -1,0 +1,14 @@
+# Ignore all markdown files
+*.md
+
+# Except README.md
+!README.md
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
