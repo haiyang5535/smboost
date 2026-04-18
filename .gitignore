@@ -4,6 +4,9 @@
 # Except README.md
 !README.md
 
+# Worktrees
+.worktrees/
+
 # Python artifacts
 __pycache__/
 *.py[cod]
