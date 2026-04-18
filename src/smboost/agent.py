@@ -40,6 +40,7 @@ class HarnessAgent:
             "retry_count": 0,
             "fallback_index": 0,
             "current_node_index": 0,
+            "shrinkage_level": 0,
             "status": "running",
             "final_output": None,
         }

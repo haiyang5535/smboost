@@ -13,6 +13,7 @@ def _make_final_state(status="success"):
         "retry_count": 0,
         "fallback_index": 0,
         "current_node_index": 1,
+        "shrinkage_level": 0,
         "status": status,
         "final_output": "done",
     }
