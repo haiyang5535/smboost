@@ -12,6 +12,7 @@ def _state() -> HarnessState:
         "task": "t", "model": "qwen3.5:2b", "fallback_chain": [],
         "step_outputs": [], "retry_count": 0, "fallback_index": 0,
         "current_node_index": 0, "status": "running", "final_output": None,
+        "shrinkage_level": 0,
     }
 
 # output_is_nonempty
