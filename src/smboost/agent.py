@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from smboost.harness.graph import HarnessGraph
 from smboost.harness.result import HarnessResult, RunStats
 from smboost.harness.state import HarnessState
+from smboost.scorer import RobustnessScorer
 from smboost.tasks.coding import CodingTaskGraph
 
 if TYPE_CHECKING:
@@ -21,6 +22,7 @@ class HarnessAgent:
         fallback_chain: list[str] | None = None,
         max_retries: int = 3,
         task_graph: TaskGraph | None = None,
+        scorer_threshold: float = 0.6,
     ):
         self.model = model
         self.scorer = scorer
@@ -29,6 +31,7 @@ class HarnessAgent:
             task_graph=task_graph or CodingTaskGraph(),
             invariant_suite=invariants,
             max_retries=max_retries,
+            scorer=RobustnessScorer(threshold=scorer_threshold),
         )
 
     def run(self, task: str) -> HarnessResult:
@@ -60,5 +63,5 @@ class HarnessAgent:
                 total_latency_s=elapsed,
                 model_used=final["model"],
             ),
-            status=final["status"],  # type: ignore[arg-type]  # HarnessGraph only terminates at "success"/"failed"
+            status=final["status"],  # type: ignore[arg-type]
         )

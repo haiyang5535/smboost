@@ -89,3 +89,22 @@ def test_run_stats_fallback_triggers_from_state():
         result = agent.run("some task")
 
     assert result.stats.fallback_triggers == 1
+
+
+def test_scorer_threshold_passed_to_harness():
+    from smboost.scorer import RobustnessScorer
+    agent = HarnessAgent(
+        model="qwen3.5:2b",
+        invariants=InvariantSuite.coding_agent(),
+        scorer_threshold=0.4,
+    )
+    assert agent._harness._scorer.threshold == 0.4
+
+
+def test_scorer_threshold_default_is_0_6():
+    from smboost.scorer import RobustnessScorer
+    agent = HarnessAgent(
+        model="qwen3.5:2b",
+        invariants=InvariantSuite.coding_agent(),
+    )
+    assert agent._harness._scorer.threshold == 0.6
