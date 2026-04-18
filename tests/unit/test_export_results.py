@@ -85,3 +85,19 @@ def test_render_js_is_valid_assignment():
     js = render_js(rows, model="qwen3.5:2b", n_tasks=50, generated_at="2026-04-18T12:00:00")
     assert js.startswith("window.SMBOOST_BENCHMARK")
     assert js.rstrip().endswith(";")
+
+
+# ---------- export_results ----------
+
+def test_export_results_writes_file(tmp_path):
+    csv_path = _write_csv(tmp_path, """
+        model,mode,pass@1,avg_retries,avg_latency_s
+        qwen3.5:2b,baseline,0.54,-,2.10
+    """)
+    out_path = tmp_path / "out" / "benchmark_data.js"
+    from benchmarks.export_results import export_results
+    export_results(csv_path, out_path, n_tasks=50)
+    content = out_path.read_text()
+    assert "window.SMBOOST_BENCHMARK" in content
+    assert '"qwen3.5:2b"' in content
+    assert out_path.exists()
