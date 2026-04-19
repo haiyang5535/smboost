@@ -58,7 +58,7 @@ def evaluate_pass_at_1(results: list[dict]) -> float:
             f.write("\n")
         tmp_path = f.name
 
-    scores = evaluate_functional_correctness(tmp_path, k=[1])
+    scores = evaluate_functional_correctness(tmp_path, k=[1], ignore_incomplete=True)
     return scores["pass@1"]
 
 
