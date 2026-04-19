@@ -18,3 +18,14 @@ build/
 .DS_Store
 **/.DS_Store
 benchmarks/results/
+
+# Frontend — local-only, never committed
+frontend/
+
+# Local model weights (GGUF / HF) — never committed
+models/
+*.gguf
+
+# Ollama Modelfiles — local-only
+Modelfile
+Modelfile-*
