@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -10,16 +11,33 @@ from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage
 
 
+_THINK_BLOCK = re.compile(r"<think>.*?</think>\n*", re.DOTALL)
+_FENCED_CODE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
+
+
+def clean_completion(raw: str) -> str:
+    """Strip <think>…</think> reasoning blocks and unwrap ```python fenced code.
+    HumanEval appends the completion to the prompt and runs it as Python, so any
+    prose or markdown is a syntax error. Preserves leading indentation because the
+    prompt ends mid-signature and the body's indent is significant.
+    """
+    cleaned = _THINK_BLOCK.sub("", raw)
+    fenced = _FENCED_CODE.search(cleaned)
+    if fenced:
+        return fenced.group(1)
+    return cleaned
+
+
 def run_baseline(tasks: list[dict], model: str) -> list[dict]:
     """Run each task through raw ChatOllama (no harness). Returns list of result dicts."""
     llm = ChatOllama(model=model)
     results = []
     for task in tasks:
         start = time.monotonic()
-        output = llm.invoke([HumanMessage(content=task["prompt"])]).content or ""
+        raw = llm.invoke([HumanMessage(content=task["prompt"])]).content or ""
         results.append({
             "task_id": task["task_id"],
-            "completion": output,
+            "completion": clean_completion(raw),
             "latency_s": round(time.monotonic() - start, 3),
             "retries": 0,
         })
@@ -41,7 +59,7 @@ def run_smboost(tasks: list[dict], model: str, scorer_threshold: float = 0.6) ->
         result = agent.run(task["prompt"])
         results.append({
             "task_id": task["task_id"],
-            "completion": result.output,
+            "completion": clean_completion(result.output or ""),
             "latency_s": result.stats.total_latency_s,
             "retries": result.stats.retry_count,
         })

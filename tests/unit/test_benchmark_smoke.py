@@ -51,3 +51,47 @@ def test_baseline_runner_calls_llm_per_task():
     assert len(results) == 2
     assert all("task_id" in r and "completion" in r and "latency_s" in r for r in results)
     assert mock_llm_cls.return_value.invoke.call_count == 2
+
+
+# ---------- clean_completion ----------
+
+def test_clean_completion_strips_think_block_preserving_indent():
+    from benchmarks.run_humaneval import clean_completion
+    raw = "<think>\nreasoning here\n</think>\n\n    return a + b"
+    assert clean_completion(raw) == "    return a + b"
+
+
+def test_clean_completion_strips_multiple_think_blocks():
+    from benchmarks.run_humaneval import clean_completion
+    raw = "<think>first</think>\n<think>second</think>\nreturn 1"
+    assert clean_completion(raw) == "return 1"
+
+
+def test_clean_completion_unwraps_python_code_fence():
+    from benchmarks.run_humaneval import clean_completion
+    raw = "```python\ndef f(x):\n    return x + 1\n```"
+    assert "def f(x):" in clean_completion(raw)
+    assert "```" not in clean_completion(raw)
+
+
+def test_clean_completion_unwraps_bare_fence():
+    from benchmarks.run_humaneval import clean_completion
+    raw = "```\nreturn 42\n```"
+    assert clean_completion(raw).strip() == "return 42"
+
+
+def test_clean_completion_think_then_fenced_code():
+    from benchmarks.run_humaneval import clean_completion
+    raw = "<think>planning</think>\n```python\nreturn a + b\n```"
+    assert clean_completion(raw).strip() == "return a + b"
+
+
+def test_clean_completion_passthrough_when_clean():
+    from benchmarks.run_humaneval import clean_completion
+    raw = "    return a + b"
+    assert clean_completion(raw) == "    return a + b"
+
+
+def test_clean_completion_handles_empty_string():
+    from benchmarks.run_humaneval import clean_completion
+    assert clean_completion("") == ""
