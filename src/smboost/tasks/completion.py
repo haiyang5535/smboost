@@ -37,17 +37,56 @@ def _clean(raw: str) -> str:
 def _generate_node(state: HarnessState, llm) -> str:
     task = state["task"]
     level = state["shrinkage_level"]
-    if level == 0:
-        prompt = task
-    elif level == 1:
-        prompt = (
-            "Complete the following Python function. Return only the function body "
-            "(indented), with no markdown, no explanation.\n\n" + task
-        )
-    elif level == 2:
-        prompt = "Complete this Python code. Code only:\n\n" + task
+    meta = state.get("task_metadata") or {}
+    testtype = meta.get("testtype", "")
+    entry_point = meta.get("entry_point", "")
+
+    if testtype == "stdin":
+        if level == 0:
+            prompt = (
+                "Solve the following competitive programming problem. "
+                "Write a complete Python program that reads from stdin and writes to stdout. "
+                "Output only the Python code, no markdown fences, no explanation.\n\n"
+                + task
+            )
+        elif level == 1:
+            prompt = (
+                "Solve this problem. Complete Python program, stdin/stdout only. "
+                "Code only, no explanation:\n\n" + task
+            )
+        elif level == 2:
+            prompt = "Python stdin/stdout solution:\n\n" + task[:600]
+        else:
+            prompt = task[:400]
+    elif testtype == "functional" and entry_point:
+        if level == 0:
+            prompt = (
+                "Complete the following Python class method. "
+                "Output only the full class with the method implemented, no markdown, no explanation.\n\n"
+                + task + "\n\n" + entry_point
+            )
+        elif level == 1:
+            prompt = (
+                "Implement this Python method. Code only:\n\n"
+                + entry_point + "\n\n" + task[:400]
+            )
+        elif level == 2:
+            prompt = "Complete this Python method:\n\n" + entry_point
+        else:
+            prompt = entry_point
     else:
-        prompt = task[:800]
+        # HumanEval-style: task IS the Python code with docstring
+        if level == 0:
+            prompt = task
+        elif level == 1:
+            prompt = (
+                "Complete the following Python function. Return only the function body "
+                "(indented), with no markdown, no explanation.\n\n" + task
+            )
+        elif level == 2:
+            prompt = "Complete this Python code. Code only:\n\n" + task
+        else:
+            prompt = task[:800]
 
     mem = _ACTIVE_MEMORY.get()
     if mem is not None:
@@ -143,13 +182,12 @@ def _verify_ast_only(state: HarnessState, _llm) -> str:
     if not outputs:
         return "FAIL: no generate output"
     completion = outputs[-1].output
-    task = state["task"]
-    try:
-        ast.parse(task + "\n" + completion)
-    except SyntaxError as exc:
-        return f"FAIL: syntax error: {exc.msg}"
     if not completion.strip():
         return "FAIL: empty completion"
+    try:
+        ast.parse(completion)
+    except SyntaxError as exc:
+        return f"FAIL: syntax error: {exc.msg}"
     return "PASS"
 
 

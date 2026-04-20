@@ -31,7 +31,7 @@ def test_c4_plain_langgraph_retry():
     assert agent.session_memory is False
     assert agent.shrinkage_enabled is False
     assert agent.scorer_enabled is False
-    assert agent.fallback_chain == ["qwen3.5:4b", "qwen3.5:9b"]
+    assert agent.fallback_chain == ["qwen3.5:4b"]
 
 
 def test_conditions_keys():

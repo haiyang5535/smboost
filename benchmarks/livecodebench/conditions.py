@@ -5,15 +5,12 @@ from smboost import HarnessAgent, InvariantSuite
 from smboost.tasks.completion import CompletionTaskGraph
 
 
-_FALLBACK = ["qwen3.5:4b", "qwen3.5:9b"]
-
-
 def _build(model: str, seed: int, *, grounded: bool, memory: bool,
            shrinkage: bool, scorer: bool) -> HarnessAgent:
     return HarnessAgent(
         model=model,
         invariants=InvariantSuite.completion(),
-        fallback_chain=_FALLBACK,
+        fallback_chain=[],  # no cross-model fallback; keep each cell pure
         task_graph=CompletionTaskGraph(grounded_verify=grounded),
         grounded_verify=grounded,
         session_memory=memory,
