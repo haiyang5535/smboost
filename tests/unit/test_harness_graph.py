@@ -7,6 +7,7 @@ from smboost.invariants.suite import InvariantSuite
 def _make_state(**overrides) -> HarnessState:
     base: HarnessState = {
         "task": "test task",
+        "task_metadata": {},
         "model": "qwen3.5:2b",
         "fallback_chain": ["qwen3.5:2b", "qwen3.5:8b"],
         "step_outputs": [],
