@@ -6,16 +6,20 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
 
+from smboost.memory.session import SessionMemory
 from smboost.tasks.base import TaskGraph
 
 if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
     from smboost.harness.state import HarnessState
+
+_ACTIVE_MEMORY: ContextVar[SessionMemory | None] = ContextVar("_ACTIVE_MEMORY", default=None)
 
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>\n*", re.DOTALL)
@@ -44,6 +48,30 @@ def _generate_node(state: HarnessState, llm) -> str:
         prompt = "Complete this Python code. Code only:\n\n" + task
     else:
         prompt = task[:800]
+
+    mem = _ACTIVE_MEMORY.get()
+    if mem is not None:
+        task_id = (state.get("task_metadata") or {}).get("task_id", "")
+        recent = mem.recent_for_task(task_id, limit=2) if task_id else []
+        if recent:
+            hints = "\n\n".join(
+                f"[{r.error_class}] {r.traceback_tail[-400:]}" for r in recent
+            )
+            prompt = (
+                f"Previous attempts failed with:\n{hints}\nFix the specific issue.\n\n"
+                + prompt
+            )
+        cross = mem.find_similar(
+            task_id=task_id,
+            prompt=task,
+            error_class=recent[0].error_class if recent else "",
+        ) if task_id else None
+        if cross is not None:
+            prompt = (
+                f"A previous different task failed similarly with {cross.error_class}. "
+                f"Avoid the same pattern.\n\n" + prompt
+            )
+
     raw = llm.invoke([HumanMessage(content=prompt)]).content or ""
     return _clean(raw)
 
@@ -144,6 +172,30 @@ def _verify_grounded(state: HarnessState, _llm) -> str:
         assertions = _make_functional_assertions(entry_point, test_cases)
         src = completion + "\n\n" + assertions
         result = _run_subprocess(src)
+        # Record failure in session memory
+        mem = _ACTIVE_MEMORY.get()
+        task_id = (state.get("task_metadata") or {}).get("task_id", "")
+        if not result["passed"] and mem is not None and task_id:
+            tb_last = result.get("traceback", "")[-800:]
+            error_type = "Error"
+            for line in reversed(tb_last.splitlines()):
+                if "Error" in line or "Exception" in line:
+                    error_type = line.strip()
+                    break
+            first_assertion = next(
+                (ln.strip() for ln in tb_last.splitlines() if ln.strip().startswith("assert ")),
+                "",
+            )
+            mem.record(
+                task_id=task_id,
+                node="verify",
+                attempt=len(state["step_outputs"]),
+                error_class=error_type,
+                error_line=error_type,
+                traceback_tail=tb_last,
+                first_assertion=first_assertion,
+                prompt_used=state["task"],
+            )
     elif testtype == "stdin":
         test_cases = meta.get("test_cases", [])
         if not test_cases:
@@ -157,6 +209,30 @@ def _verify_grounded(state: HarnessState, _llm) -> str:
                 tb = f"OutputMismatch: expected {tc['output']!r}, got {result['stdout']!r}"
                 result = {"passed": False, "traceback": tb}
                 break
+        # Record failure in session memory
+        mem = _ACTIVE_MEMORY.get()
+        task_id = (state.get("task_metadata") or {}).get("task_id", "")
+        if not result["passed"] and mem is not None and task_id:
+            tb_last = result.get("traceback", "")[-800:]
+            error_type = "Error"
+            for line in reversed(tb_last.splitlines()):
+                if "Error" in line or "Exception" in line:
+                    error_type = line.strip()
+                    break
+            first_assertion = next(
+                (ln.strip() for ln in tb_last.splitlines() if ln.strip().startswith("assert ")),
+                "",
+            )
+            mem.record(
+                task_id=task_id,
+                node="verify",
+                attempt=len(state["step_outputs"]),
+                error_class=error_type,
+                error_line=error_type,
+                traceback_tail=tb_last,
+                first_assertion=first_assertion,
+                prompt_used=state["task"],
+            )
     else:
         return _verify_ast_only(state, _llm)
 

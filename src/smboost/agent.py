@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from smboost.harness.graph import HarnessGraph
 from smboost.harness.result import HarnessResult, RunStats
 from smboost.harness.state import HarnessState
+from smboost.memory.session import SessionMemory
 from smboost.scorer import RobustnessScorer
 from smboost.tasks.coding import CodingTaskGraph
 
@@ -35,6 +36,7 @@ class HarnessAgent:
         self.session_memory = session_memory
         self.shrinkage_enabled = shrinkage_enabled
         self.scorer_enabled = scorer_enabled
+        self._memory = SessionMemory() if session_memory else None
         self._harness = HarnessGraph(
             task_graph=task_graph or CodingTaskGraph(),
             invariant_suite=invariants,
@@ -44,6 +46,8 @@ class HarnessAgent:
         )
 
     def run(self, task: str, task_metadata: dict | None = None) -> HarnessResult:
+        from smboost.tasks import completion as comp_mod
+
         initial: HarnessState = {
             "task": task,
             "task_metadata": task_metadata or {},
@@ -59,7 +63,11 @@ class HarnessAgent:
         }
 
         start = time.monotonic()
-        final = self._harness.invoke(initial)
+        token = comp_mod._ACTIVE_MEMORY.set(self._memory if self.session_memory else None)
+        try:
+            final = self._harness.invoke(initial)
+        finally:
+            comp_mod._ACTIVE_MEMORY.reset(token)
         elapsed = round(time.monotonic() - start, 3)
 
         steps = final["step_outputs"]
@@ -75,3 +83,13 @@ class HarnessAgent:
             ),
             status=final["status"],  # type: ignore[arg-type]
         )
+
+    def set_memory_log(self, log_path) -> None:
+        if self._memory is not None and log_path is not None:
+            from pathlib import Path
+            self._memory._log_fh = open(Path(log_path), "w")
+            self._memory._log_path = Path(log_path)
+
+    def close_memory(self) -> None:
+        if self._memory is not None:
+            self._memory.close()
