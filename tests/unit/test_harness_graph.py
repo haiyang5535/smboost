@@ -41,7 +41,7 @@ def test_successful_single_node_sets_status_success():
     tg = _make_task_graph(["plan"])
     graph = HarnessGraph(tg, _pass_suite(["plan"]), max_retries=3)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(_make_state())
 
     assert result["status"] == "success"
@@ -52,7 +52,7 @@ def test_failed_exit_invariant_increments_retry_count():
     tg = _make_task_graph(["plan"])
     graph = HarnessGraph(tg, _fail_suite(["plan"]), max_retries=3)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(_make_state())
 
     assert result["retry_count"] == 1
@@ -64,7 +64,7 @@ def test_retry_exhaustion_triggers_fallback():
     tg = _make_task_graph(["plan"])
     graph = HarnessGraph(tg, _fail_suite(["plan"]), max_retries=2)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(_make_state(retry_count=2, fallback_index=0))
 
     assert result["model"] == "qwen3.5:8b"
@@ -76,7 +76,7 @@ def test_fallback_exhaustion_sets_status_failed():
     tg = _make_task_graph(["plan"])
     graph = HarnessGraph(tg, _fail_suite(["plan"]), max_retries=2)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(
             _make_state(retry_count=2, fallback_index=1,
                         model="qwen3.5:8b",
@@ -120,7 +120,7 @@ def test_advances_node_index_on_success_with_multiple_nodes():
     })
     graph = HarnessGraph(tg, suite, max_retries=3)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(_make_state(current_node_index=0))
 
     assert result["current_node_index"] == 1
@@ -143,7 +143,7 @@ def test_systematic_failure_increments_shrinkage_level():
     scorer = _make_mock_scorer(confidence=0.2)  # below threshold
     graph = HarnessGraph(tg, _fail_suite(["plan"]), max_retries=3, scorer=scorer)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(_make_state())
 
     assert result["shrinkage_level"] == 1
@@ -156,7 +156,7 @@ def test_transient_failure_keeps_shrinkage_level_unchanged():
     scorer = _make_mock_scorer(confidence=0.9)  # above threshold
     graph = HarnessGraph(tg, _fail_suite(["plan"]), max_retries=3, scorer=scorer)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(_make_state(shrinkage_level=2))
 
     assert result["shrinkage_level"] == 2
@@ -168,7 +168,7 @@ def test_shrinkage_exhaustion_triggers_early_fallback():
     scorer = _make_mock_scorer(confidence=0.1)  # systematic
     graph = HarnessGraph(tg, _fail_suite(["plan"]), max_retries=5, scorer=scorer)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(_make_state(shrinkage_level=3, fallback_index=0))
 
     assert result["model"] == "qwen3.5:8b"
@@ -181,7 +181,7 @@ def test_shrinkage_exhaustion_with_no_fallback_sets_failed():
     scorer = _make_mock_scorer(confidence=0.1)
     graph = HarnessGraph(tg, _fail_suite(["plan"]), max_retries=5, scorer=scorer)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(
             _make_state(shrinkage_level=3, fallback_index=1,
                         model="qwen3.5:8b",
@@ -195,13 +195,20 @@ def test_success_resets_shrinkage_level_to_zero():
     tg = _make_task_graph(["plan"])
     graph = HarnessGraph(tg, _pass_suite(["plan"]), max_retries=3)
 
-    with patch("smboost.harness.graph.ChatOllama"):
+    with patch("smboost.harness.graph.ChatOpenAI"):
         result = graph._execute_step(_make_state(shrinkage_level=2))
 
     assert result["shrinkage_level"] == 0
 
 
-def test_default_scorer_is_robustness_scorer():
+def test_default_scorer_is_none():
     tg = _make_task_graph(["plan"])
     graph = HarnessGraph(tg, _pass_suite(["plan"]))
+    assert graph._scorer is None
+
+
+def test_explicit_scorer_is_stored():
+    tg = _make_task_graph(["plan"])
+    scorer = RobustnessScorer()
+    graph = HarnessGraph(tg, _pass_suite(["plan"]), scorer=scorer)
     assert isinstance(graph._scorer, RobustnessScorer)

@@ -23,20 +23,30 @@ class HarnessAgent:
         max_retries: int = 3,
         task_graph: TaskGraph | None = None,
         scorer_threshold: float = 0.6,
+        grounded_verify: bool = True,
+        session_memory: bool = True,
+        shrinkage_enabled: bool = True,
+        scorer_enabled: bool = True,
     ):
         self.model = model
         self.scorer = scorer
         self.fallback_chain = fallback_chain or [model]
+        self.grounded_verify = grounded_verify
+        self.session_memory = session_memory
+        self.shrinkage_enabled = shrinkage_enabled
+        self.scorer_enabled = scorer_enabled
         self._harness = HarnessGraph(
             task_graph=task_graph or CodingTaskGraph(),
             invariant_suite=invariants,
             max_retries=max_retries,
-            scorer=RobustnessScorer(threshold=scorer_threshold),
+            scorer=RobustnessScorer(threshold=scorer_threshold) if scorer_enabled else None,
+            shrinkage_enabled=shrinkage_enabled,
         )
 
-    def run(self, task: str) -> HarnessResult:
+    def run(self, task: str, task_metadata: dict | None = None) -> HarnessResult:
         initial: HarnessState = {
             "task": task,
+            "task_metadata": task_metadata or {},
             "model": self.model,
             "fallback_chain": self.fallback_chain,
             "step_outputs": [],

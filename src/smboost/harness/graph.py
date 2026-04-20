@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
@@ -20,11 +20,13 @@ class HarnessGraph:
         invariant_suite: InvariantSuite,
         max_retries: int = 3,
         scorer: RobustnessScorer | None = None,
+        shrinkage_enabled: bool = True,
     ):
         self._task_graph = task_graph
         self._suite = invariant_suite
         self._max_retries = max_retries
-        self._scorer = scorer or RobustnessScorer()
+        self._scorer = scorer  # None means no self-consistency scoring
+        self._shrinkage_enabled = shrinkage_enabled
         self._compiled = self._build()
 
     def _build(self):
@@ -64,7 +66,7 @@ class HarnessGraph:
                 "status": "running",
             }
 
-        llm = ChatOllama(model=current_model)
+        llm = ChatOpenAI(base_url="http://localhost:8000/v1", api_key="sk-no-key", model=current_model)
         node_fn = self._task_graph.get_node_fn(node_name)
         try:
             output = node_fn(state, llm)
@@ -76,7 +78,10 @@ class HarnessGraph:
         passed = node_exception is None and all(inv(state, output) for inv in exit_invs)
 
         if not passed:
-            best_output, confidence = self._scorer.score(node_fn, state, llm)
+            if self._scorer is not None:
+                best_output, confidence = self._scorer.score(node_fn, state, llm)
+            else:
+                best_output, confidence = output, 0.0
             step = StepOutput(
                 node=node_name,
                 model=current_model,
@@ -84,7 +89,11 @@ class HarnessGraph:
                 confidence=confidence,
                 passed=False,
             )
-            new_shrinkage = shrinkage_level + (1 if confidence < self._scorer.threshold else 0)
+            if self._shrinkage_enabled:
+                threshold = self._scorer.threshold if self._scorer else 0.6
+                new_shrinkage = shrinkage_level + (1 if confidence < threshold else 0)
+            else:
+                new_shrinkage = shrinkage_level  # frozen — prompt never shrinks
 
             if new_shrinkage > 3:
                 next_fi = fallback_index + 1
