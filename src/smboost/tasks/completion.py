@@ -1,0 +1,194 @@
+from __future__ import annotations
+import ast
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from langchain_core.messages import HumanMessage
+
+from smboost.tasks.base import TaskGraph
+
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
+    from smboost.harness.state import HarnessState
+
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>\n*", re.DOTALL)
+_FENCED_CODE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
+
+
+def _clean(raw: str) -> str:
+    cleaned = _THINK_BLOCK.sub("", raw)
+    fenced = _FENCED_CODE.search(cleaned)
+    if fenced:
+        return fenced.group(1)
+    return cleaned
+
+
+def _generate_node(state: HarnessState, llm) -> str:
+    task = state["task"]
+    level = state["shrinkage_level"]
+    if level == 0:
+        prompt = task
+    elif level == 1:
+        prompt = (
+            "Complete the following Python function. Return only the function body "
+            "(indented), with no markdown, no explanation.\n\n" + task
+        )
+    elif level == 2:
+        prompt = "Complete this Python code. Code only:\n\n" + task
+    else:
+        prompt = task[:800]
+    raw = llm.invoke([HumanMessage(content=prompt)]).content or ""
+    return _clean(raw)
+
+
+def _make_functional_assertions(entry_point: str, test_cases: list) -> str:
+    lines = []
+    for tc in test_cases:
+        try:
+            args = json.loads(tc["input"])
+            if not isinstance(args, list):
+                args = [args]
+            arg_repr = ", ".join(repr(a) for a in args)
+        except (json.JSONDecodeError, TypeError):
+            arg_repr = repr(tc["input"])
+        try:
+            expected = json.loads(tc["output"])
+        except (json.JSONDecodeError, TypeError):
+            expected = tc["output"]
+        lines.append(f"assert {entry_point}({arg_repr}) == {expected!r}")
+    return "\n".join(lines)
+
+
+def _run_subprocess(src: str, stdin_data: str = "", timeout: int = 12) -> dict:
+    """Run src in a fresh subprocess. Returns {passed, stderr, traceback, stdout}."""
+
+    def _set_limits():
+        try:
+            import resource
+            resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+            except (ValueError, OSError):
+                pass
+        except ImportError:
+            pass
+
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+        f.write(src)
+        tmp = Path(f.name)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(tmp)],
+            input=stdin_data,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            preexec_fn=_set_limits if sys.platform != "win32" else None,
+        )
+        tb = proc.stderr[-800:] if proc.stderr else ""
+        return {
+            "passed": proc.returncode == 0,
+            "stderr": proc.stderr,
+            "traceback": tb,
+            "stdout": proc.stdout,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "passed": False,
+            "stderr": "",
+            "traceback": f"TimeoutError: exceeded {timeout}s",
+            "stdout": "",
+        }
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _verify_ast_only(state: HarnessState, _llm) -> str:
+    outputs = state["step_outputs"]
+    if not outputs:
+        return "FAIL: no generate output"
+    completion = outputs[-1].output
+    task = state["task"]
+    try:
+        ast.parse(task + "\n" + completion)
+    except SyntaxError as exc:
+        return f"FAIL: syntax error: {exc.msg}"
+    if not completion.strip():
+        return "FAIL: empty completion"
+    return "PASS"
+
+
+def _verify_grounded(state: HarnessState, _llm) -> str:
+    outputs = state["step_outputs"]
+    if not outputs:
+        return "FAIL: no generate output"
+    completion = outputs[-1].output
+    meta = state.get("task_metadata") or {}
+    testtype = meta.get("testtype")
+
+    if not testtype:
+        return _verify_ast_only(state, _llm)
+
+    if testtype == "functional":
+        entry_point = meta.get("entry_point", "")
+        test_cases = meta.get("test_cases", [])
+        if not entry_point or not test_cases:
+            return _verify_ast_only(state, _llm)
+        assertions = _make_functional_assertions(entry_point, test_cases)
+        src = completion + "\n\n" + assertions
+        result = _run_subprocess(src)
+    elif testtype == "stdin":
+        test_cases = meta.get("test_cases", [])
+        if not test_cases:
+            return _verify_ast_only(state, _llm)
+        result = {"passed": True, "traceback": "", "stdout": ""}
+        for tc in test_cases:
+            result = _run_subprocess(completion, stdin_data=tc.get("input", ""))
+            if not result["passed"]:
+                break
+            if tc.get("output", "").strip() != result["stdout"].strip():
+                tb = f"OutputMismatch: expected {tc['output']!r}, got {result['stdout']!r}"
+                result = {"passed": False, "traceback": tb}
+                break
+    else:
+        return _verify_ast_only(state, _llm)
+
+    if result["passed"]:
+        return "PASS"
+    tb = result.get("traceback", "")
+    lines = tb.splitlines()
+    error_type = "Error"
+    for line in reversed(lines):
+        if "Error" in line or "Exception" in line:
+            error_type = line.strip()
+            break
+    return f"FAIL: {error_type}\n{tb[-800:]}"
+
+
+class CompletionTaskGraph(TaskGraph):
+    """Code-completion task graph for HumanEval + LiveCodeBench.
+
+    grounded_verify=True  — uses subprocess sandbox against task_metadata test cases.
+    grounded_verify=False — legacy ast.parse-only verify (ablation C2, C4).
+    """
+
+    def __init__(self, grounded_verify: bool = True):
+        self._grounded = grounded_verify
+
+    @property
+    def node_names(self) -> list[str]:
+        return ["generate", "verify"]
+
+    def get_node_fn(self, node_name: str):
+        if node_name == "generate":
+            return _generate_node
+        if node_name == "verify":
+            return _verify_grounded if self._grounded else _verify_ast_only
+        raise ValueError(f"Unknown node {node_name!r}. Valid names: {self.node_names}")
