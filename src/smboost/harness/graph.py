@@ -66,7 +66,12 @@ class HarnessGraph:
                 "status": "running",
             }
 
-        llm = ChatOpenAI(base_url="http://localhost:8000/v1", api_key="sk-no-key", model=current_model)
+        llm = ChatOpenAI(
+            base_url="http://localhost:8000/v1",
+            api_key="sk-no-key",
+            model=current_model,
+            max_tokens=2048,
+        )
         node_fn = self._task_graph.get_node_fn(node_name)
         try:
             output = node_fn(state, llm)
@@ -115,6 +120,7 @@ class HarnessGraph:
             return {
                 "step_outputs": state["step_outputs"] + [step],
                 "retry_count": retry_count + 1,
+                "current_node_index": 0,  # restart from generate on any failure
                 "model": current_model,
                 "fallback_index": fallback_index,
                 "shrinkage_level": new_shrinkage,

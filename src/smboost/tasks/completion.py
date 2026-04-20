@@ -26,11 +26,23 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>\n*", re.DOTALL)
 _FENCED_CODE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
 
 
+_UNCLOSED_FENCE = re.compile(r"```(?:python|py)?\s*\n(.*?)$", re.DOTALL)
+
+
 def _clean(raw: str) -> str:
+    # Strip closed <think>...</think> blocks (normal case)
     cleaned = _THINK_BLOCK.sub("", raw)
+    # Strip unclosed <think> block — model was truncated before </think>
+    if "<think>" in cleaned:
+        cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL).strip()
+    # Extract from closed ```python...``` fence
     fenced = _FENCED_CODE.search(cleaned)
     if fenced:
         return fenced.group(1)
+    # Extract from unclosed fence — model truncated before closing ```
+    unclosed = _UNCLOSED_FENCE.search(cleaned)
+    if unclosed:
+        return unclosed.group(1)
     return cleaned
 
 
@@ -111,11 +123,42 @@ def _generate_node(state: HarnessState, llm) -> str:
                 f"Avoid the same pattern.\n\n" + prompt
             )
 
-    raw = llm.invoke([HumanMessage(content=prompt)]).content or ""
+    # /no_think disables Qwen3's extended thinking mode so the model responds directly
+    raw = llm.invoke([HumanMessage(content="/no_think\n\n" + prompt)]).content or ""
     return _clean(raw)
 
 
+def _entry_point_caller(entry_point: str) -> str:
+    """Return a callable expression for use in assertions.
+
+    Handles three formats:
+      - LCB class skeleton: 'class Solution:\\n    def count(...):'  → 'Solution().count'
+      - Plain function def:  'def double(x):'                         → 'double'
+      - Bare name:           'double'                                  → 'double'
+    """
+    if not entry_point:
+        return "solve"
+    try:
+        tree = ast.parse(entry_point)
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                class_name = node.name
+                for child in node.body:
+                    if isinstance(child, ast.FunctionDef) and not child.name.startswith("_"):
+                        return f"{class_name}().{child.name}"
+                return f"{class_name}()"
+            if isinstance(node, ast.FunctionDef):
+                return node.name
+    except Exception:
+        pass
+    # bare name with no spaces/newlines
+    if "\n" not in entry_point and " " not in entry_point:
+        return entry_point.strip()
+    return "solve"
+
+
 def _make_functional_assertions(entry_point: str, test_cases: list) -> str:
+    caller = _entry_point_caller(entry_point)
     lines = []
     for tc in test_cases:
         try:
@@ -129,7 +172,7 @@ def _make_functional_assertions(entry_point: str, test_cases: list) -> str:
             expected = json.loads(tc["output"])
         except (json.JSONDecodeError, TypeError):
             expected = tc["output"]
-        lines.append(f"assert {entry_point}({arg_repr}) == {expected!r}")
+        lines.append(f"assert {caller}({arg_repr}) == {expected!r}")
     return "\n".join(lines)
 
 
@@ -177,11 +220,17 @@ def _run_subprocess(src: str, stdin_data: str = "", timeout: int = 12) -> dict:
         tmp.unlink(missing_ok=True)
 
 
+def _last_generate_output(state: HarnessState) -> str | None:
+    return next(
+        (s.output for s in reversed(state["step_outputs"]) if s.node == "generate"),
+        None,
+    )
+
+
 def _verify_ast_only(state: HarnessState, _llm) -> str:
-    outputs = state["step_outputs"]
-    if not outputs:
+    completion = _last_generate_output(state)
+    if completion is None:
         return "FAIL: no generate output"
-    completion = outputs[-1].output
     if not completion.strip():
         return "FAIL: empty completion"
     try:
@@ -192,10 +241,9 @@ def _verify_ast_only(state: HarnessState, _llm) -> str:
 
 
 def _verify_grounded(state: HarnessState, _llm) -> str:
-    outputs = state["step_outputs"]
-    if not outputs:
+    completion = _last_generate_output(state)
+    if completion is None:
         return "FAIL: no generate output"
-    completion = outputs[-1].output
     meta = state.get("task_metadata") or {}
     testtype = meta.get("testtype")
 
