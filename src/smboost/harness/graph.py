@@ -138,7 +138,10 @@ class HarnessGraph:
         is_done = next_index >= len(self._task_graph.node_names)
         return {
             "step_outputs": state["step_outputs"] + [step],
-            "retry_count": 0,
+            # Don't reset retry_count on intermediate node success — only failures
+            # should count toward max_retries. Resetting here caused generate to
+            # clear verify's failure count, making max_retries unreachable (infinite loop).
+            "retry_count": retry_count,
             "current_node_index": next_index,
             "final_output": output,
             "model": current_model,

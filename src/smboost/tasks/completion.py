@@ -139,7 +139,9 @@ def _entry_point_caller(entry_point: str) -> str:
     if not entry_point:
         return "solve"
     try:
-        tree = ast.parse(entry_point)
+        # Entry points often end with just whitespace (empty method body).
+        # Append `pass` to make the skeleton parseable.
+        tree = ast.parse(entry_point.rstrip() + "\n        pass")
         for node in tree.body:
             if isinstance(node, ast.ClassDef):
                 class_name = node.name
