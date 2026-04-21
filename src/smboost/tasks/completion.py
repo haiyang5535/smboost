@@ -71,23 +71,27 @@ def _generate_node(state: HarnessState, llm) -> str:
         else:
             prompt = task[:400]
     elif testtype == "functional" and entry_point:
+        # Give a complete stub with `pass` so the model only replaces the body,
+        # not the signature. Small models ignore "use EXACTLY this signature"
+        # instructions but reliably keep the skeleton when given a stub.
+        stub = entry_point.rstrip() + "\n        pass"
         if level == 0:
             prompt = (
-                "Implement the following Python class method.\n"
-                "YOU MUST use EXACTLY this method signature (same name, same parameters):\n\n"
-                + entry_point + "\n\n"
-                "Problem description:\n" + task + "\n\n"
-                "Output only the complete class. No markdown, no explanation."
+                "Complete this Python class by replacing `pass` with your implementation.\n"
+                "Keep the class name and method signature EXACTLY as written.\n\n"
+                + stub + "\n\n"
+                "Problem:\n" + task + "\n\n"
+                "Output only the complete class, no markdown, no explanation."
             )
         elif level == 1:
             prompt = (
-                "Implement this method exactly as shown. Code only:\n\n"
-                + entry_point + "\n\n" + task[:400]
+                "Replace `pass` with the implementation. Keep the signature exactly:\n\n"
+                + stub + "\n\n" + task[:400]
             )
         elif level == 2:
-            prompt = "Implement this Python method:\n\n" + entry_point
+            prompt = "Complete this (replace pass):\n\n" + stub
         else:
-            prompt = entry_point
+            prompt = stub
     else:
         # HumanEval-style: task IS the Python code with docstring
         if level == 0:
