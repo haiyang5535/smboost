@@ -73,17 +73,19 @@ def _generate_node(state: HarnessState, llm) -> str:
     elif testtype == "functional" and entry_point:
         if level == 0:
             prompt = (
-                "Complete the following Python class method. "
-                "Output only the full class with the method implemented, no markdown, no explanation.\n\n"
-                + task + "\n\n" + entry_point
+                "Implement the following Python class method.\n"
+                "YOU MUST use EXACTLY this method signature (same name, same parameters):\n\n"
+                + entry_point + "\n\n"
+                "Problem description:\n" + task + "\n\n"
+                "Output only the complete class. No markdown, no explanation."
             )
         elif level == 1:
             prompt = (
-                "Implement this Python method. Code only:\n\n"
+                "Implement this method exactly as shown. Code only:\n\n"
                 + entry_point + "\n\n" + task[:400]
             )
         elif level == 2:
-            prompt = "Complete this Python method:\n\n" + entry_point
+            prompt = "Implement this Python method:\n\n" + entry_point
         else:
             prompt = entry_point
     else:
@@ -258,7 +260,12 @@ def _verify_grounded(state: HarnessState, _llm) -> str:
         if not entry_point or not test_cases:
             return _verify_ast_only(state, _llm)
         assertions = _make_functional_assertions(entry_point, test_cases)
-        src = completion + "\n\n" + assertions
+        # Prepend standard imports so models don't need to remember them
+        preamble = (
+            "from typing import *\n"
+            "import collections, functools, itertools, math, sys, heapq, bisect\n\n"
+        )
+        src = preamble + completion + "\n\n" + assertions
         result = _run_subprocess(src)
         # Record failure in session memory
         mem = _ACTIVE_MEMORY.get()

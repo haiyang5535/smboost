@@ -70,7 +70,7 @@ class HarnessGraph:
             base_url="http://localhost:8000/v1",
             api_key="sk-no-key",
             model=current_model,
-            max_tokens=2048,
+            max_tokens=4096,
         )
         node_fn = self._task_graph.get_node_fn(node_name)
         try:
