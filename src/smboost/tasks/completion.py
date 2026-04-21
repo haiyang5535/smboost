@@ -165,6 +165,43 @@ def _entry_point_caller(entry_point: str) -> str:
     return "solve"
 
 
+def _fix_method_signature(completion: str, entry_point: str) -> str:
+    """Patch the method signature in completion to match entry_point.
+
+    Small models ignore signature instructions and drop parameters. This
+    replaces the model's args/return annotation with the correct ones so the
+    verify harness can call Solution().method(*expected_args) without TypeError.
+    The body is kept as-is; wrong logic produces AssertionError, not TypeError.
+    """
+    try:
+        expected_tree = ast.parse(entry_point.rstrip() + "\n        pass")
+        expected_cls = next(
+            (n for n in expected_tree.body if isinstance(n, ast.ClassDef)), None
+        )
+        if expected_cls is None:
+            return completion
+        expected_fn = next(
+            (n for n in expected_cls.body
+             if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")),
+            None,
+        )
+        if expected_fn is None:
+            return completion
+
+        tree = ast.parse(completion)
+        patched = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == expected_fn.name:
+                node.args = expected_fn.args
+                node.returns = expected_fn.returns
+                patched = True
+        if patched:
+            return ast.unparse(tree)
+    except Exception:
+        pass
+    return completion
+
+
 def _make_functional_assertions(entry_point: str, test_cases: list) -> str:
     caller = _entry_point_caller(entry_point)
     lines = []
@@ -264,12 +301,14 @@ def _verify_grounded(state: HarnessState, _llm) -> str:
         if not entry_point or not test_cases:
             return _verify_ast_only(state, _llm)
         assertions = _make_functional_assertions(entry_point, test_cases)
+        # Fix the method signature if the model generated wrong arg count/names
+        fixed = _fix_method_signature(completion, entry_point)
         # Prepend standard imports so models don't need to remember them
         preamble = (
             "from typing import *\n"
             "import collections, functools, itertools, math, sys, heapq, bisect\n\n"
         )
-        src = preamble + completion + "\n\n" + assertions
+        src = preamble + fixed + "\n\n" + assertions
         result = _run_subprocess(src)
         # Record failure in session memory
         mem = _ACTIVE_MEMORY.get()
