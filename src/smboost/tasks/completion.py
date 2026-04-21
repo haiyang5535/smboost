@@ -168,37 +168,56 @@ def _entry_point_caller(entry_point: str) -> str:
 def _fix_method_signature(completion: str, entry_point: str) -> str:
     """Patch the method signature in completion to match entry_point.
 
-    Small models ignore signature instructions and drop parameters. This
-    replaces the model's args/return annotation with the correct ones so the
-    verify harness can call Solution().method(*expected_args) without TypeError.
-    The body is kept as-is; wrong logic produces AssertionError, not TypeError.
+    Small models ignore signature instructions and drop parameters. We try
+    AST-based patching first (cleaner), then fall back to regex (works even
+    when the completion has a SyntaxError from truncation). Either way the
+    body is kept as-is; wrong logic produces AssertionError, not TypeError.
     """
+    # Extract expected method name and signature line from entry_point
+    sig_match = re.search(r"(def\s+(\w+)\s*\([^)]*\)[^:]*:)", entry_point)
+    if not sig_match:
+        return completion
+    correct_sig_line = sig_match.group(1)
+    method_name = sig_match.group(2)
+
+    # Strategy 1: AST — works when completion is syntactically valid
     try:
         expected_tree = ast.parse(entry_point.rstrip() + "\n        pass")
         expected_cls = next(
             (n for n in expected_tree.body if isinstance(n, ast.ClassDef)), None
         )
-        if expected_cls is None:
-            return completion
-        expected_fn = next(
-            (n for n in expected_cls.body
-             if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")),
-            None,
-        )
-        if expected_fn is None:
-            return completion
-
-        tree = ast.parse(completion)
-        patched = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == expected_fn.name:
-                node.args = expected_fn.args
-                node.returns = expected_fn.returns
-                patched = True
-        if patched:
-            return ast.unparse(tree)
+        if expected_cls is not None:
+            expected_fn = next(
+                (n for n in expected_cls.body
+                 if isinstance(n, ast.FunctionDef) and n.name == method_name),
+                None,
+            )
+            if expected_fn is not None:
+                tree = ast.parse(completion)
+                patched = False
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.FunctionDef) and node.name == method_name:
+                        node.args = expected_fn.args
+                        node.returns = expected_fn.returns
+                        patched = True
+                if patched:
+                    return ast.unparse(tree)
     except Exception:
         pass
+
+    # Strategy 2: Regex — works even when completion has syntax errors
+    try:
+        fixed = re.sub(
+            r"def\s+" + re.escape(method_name) + r"\s*\([^)]*\)[^:]*:",
+            correct_sig_line,
+            completion,
+            count=1,
+        )
+        if fixed != completion:
+            return fixed
+    except Exception:
+        pass
+
     return completion
 
 
