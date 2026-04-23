@@ -1,10 +1,31 @@
 """Execute one gate: load N tasks for a benchmark, run them under each
 (model, condition) config, return flat row list suitable for the criteria
 module.
+
+HumanEval+ scoring path: by default we use `runner.evaluate_dual`, which
+assumes the caller has submitted completions for all 164 HumanEval problems
+(today's gates submit only N=20..50, so this path silently treats
+unsubmitted tasks as "fail"; `passed_heval_plus` mirrors base). Setting
+the env var `SMBOOST_USE_EVALPLUS_SUBSET=1` switches to the real
+HumanEval+ scorer at `benchmarks.humaneval_plus.evalplus_eval.evaluate_subset`,
+which pads the submission to 164 problems internally and gives correct per-
+task `passed_heval_plus` values from the ~80x plus-tests. See
+`docs/superpowers/research/2026-04-23-evalplus-he-plus-fix.md`.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+
+
+if os.getenv("SMBOOST_USE_EVALPLUS_SUBSET"):
+    from benchmarks.humaneval_plus.evalplus_eval import (
+        evaluate_subset as _evaluate_humaneval_dual,
+    )
+else:
+    from benchmarks.humaneval_plus.runner import (
+        evaluate_dual as _evaluate_humaneval_dual,
+    )
 
 
 @dataclass
@@ -30,10 +51,9 @@ def _load_tasks_for_bench(bench: str, n: int) -> list[dict]:
 
 def _run_humaneval_raw(tasks: list[dict], model: str) -> list[dict]:
     from benchmarks.run_humaneval import run_baseline
-    from benchmarks.humaneval_plus.runner import evaluate_dual
 
     results = run_baseline(tasks, model)
-    eval_out = evaluate_dual(results)
+    eval_out = _evaluate_humaneval_dual(results)
     return [
         {
             "task_id": r["task_id"],
@@ -57,7 +77,6 @@ def _run_humaneval_harness(
 ) -> list[dict]:
     """Run through a C1-C6 harness condition. Returns row dicts (HE+ scored)."""
     from benchmarks.conditions import build_condition
-    from benchmarks.humaneval_plus.runner import evaluate_dual
     from benchmarks.run_humaneval import clean_completion
 
     results: list[dict] = []
@@ -78,7 +97,7 @@ def _run_humaneval_harness(
                 "retries": run.stats.retry_count,
             }
         )
-    eval_out = evaluate_dual(results)
+    eval_out = _evaluate_humaneval_dual(results)
     return [
         {
             "task_id": r["task_id"],
