@@ -34,3 +34,7 @@ Modelfile-*
 # Logs
 *.log
 benchmarks/data/*.jsonl
+
+# BFCL downloaded cache (keep .gitkeep so directory is tracked)
+benchmarks/bfcl/data/*.jsonl
+!benchmarks/bfcl/data/.gitkeep
