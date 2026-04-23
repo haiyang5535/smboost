@@ -56,15 +56,15 @@ cd ..
 
 Our LiveCodeBench `Hard` test set (`livecodebench_hard_v1.jsonl`) and other raw data logs are ignored by Git due to their size.
 
-Please download the official dataset and process it locally:
+You can download the pre-processed benchmark dataset directly from our Hugging Face dataset repository. Run the following commands:
 
-1. Download the official LiveCodeBench dataset (from their Hugging Face repository or official release) and extract the raw `test.jsonl`.
-2. Save it to `benchmarks/data/test.jsonl`.
-3. Run the processing script to filter the "Hard" tasks and format them for the harness:
-   ```bash
-   python scripts/process_lcb.py
-   ```
-   _(This will automatically generate the `benchmarks/data/livecodebench_hard_v1.jsonl` file used in the evaluation matrix)._
+```bash
+# Ensure the Hugging Face CLI is installed
+pip install -U "huggingface_hub[cli]"
+
+# Download the dataset directly into the benchmarks directory
+hf download hai5535/smboost-lcb-hard livecodebench_hard_v1.jsonl --local-dir benchmarks/data/ --repo-type dataset
+```
 
 ---
 
