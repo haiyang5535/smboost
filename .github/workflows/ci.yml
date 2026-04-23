@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,bench]"
+      - name: Unit tests (fast suite, no server)
+        # Skip tests/unit/livecodebench — those paths may need downloaded
+        # LCB data or a running llama.cpp server on GHA.
+        run: pytest tests/unit -q --ignore=tests/unit/livecodebench
+      - name: Lint (non-fatal)
+        run: |
+          pip install ruff
+          # `|| true` so lint warnings don't fail the build yet; surface only.
+          ruff check --select E,F,W,I src/ benchmarks/ tests/ || true
