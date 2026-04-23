@@ -3,8 +3,10 @@
 Raw mode: ChatOpenAI against the llama.cpp server, expects a JSON object like
     {"name": "fn", "arguments": {"arg1": "...", ...}}
 
-Harness mode: uses build_condition to build a HarnessAgent with a
-ToolCallingTaskGraph bound to the task's function list.
+Harness mode: uses build_condition to build a HarnessAgent with an
+EmitOnlyToolCallingTaskGraph bound to the task's function list. The harness
+only emits the call; BFCL's ground-truth match judges structural correctness.
+Executing BFCL's fictitious tool schemas would crash, so we never invoke them.
 """
 from __future__ import annotations
 
@@ -116,7 +118,7 @@ def run_bfcl_harness(
         agent = build_condition(
             condition=condition,
             model=model,
-            task_graph_kind="tool_calling",
+            task_graph_kind="emit_only_tool_calling",
             tools=t["functions"],  # BFCL functions already in tool-schema shape
         )
         result = agent.run(t["question"])

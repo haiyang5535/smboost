@@ -11,6 +11,7 @@ from typing import Any
 from smboost import HarnessAgent, InvariantSuite
 from smboost.llm.runtime import get_benchmark_llm_factory
 from smboost.tasks.completion import CompletionTaskGraph
+from smboost.tasks.emit_only_tool_calling import EmitOnlyToolCallingTaskGraph
 from smboost.tasks.tool_calling import ToolCallingTaskGraph
 
 
@@ -42,10 +43,13 @@ def build_condition(
     elif task_graph_kind == "tool_calling":
         task_graph = ToolCallingTaskGraph(tools=tools or [])
         invariants = InvariantSuite.tool_calling()
+    elif task_graph_kind == "emit_only_tool_calling":
+        task_graph = EmitOnlyToolCallingTaskGraph(tools=tools or [])
+        invariants = InvariantSuite.emit_only_tool_calling()
     else:
         raise ValueError(
             f"unknown task_graph_kind: {task_graph_kind!r}; "
-            "must be 'completion' or 'tool_calling'"
+            "must be 'completion', 'tool_calling', or 'emit_only_tool_calling'"
         )
 
     return HarnessAgent(

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from unittest.mock import patch, MagicMock
 
-import pytest
-
 from benchmarks.bfcl.runner import (
     run_bfcl_raw,
     run_bfcl_harness,
@@ -92,35 +90,28 @@ def test_run_bfcl_harness_uses_tool_calling_graph():
     assert r["retries"] == 0
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Finding F2: ToolCallingTaskGraph can't consume BFCL dict schemas; "
-        "needs EmitOnlyToolCallingTaskGraph.  When that lands, this becomes "
-        "an xpass and should be un-marked."
-    ),
-    strict=False,
-    raises=AttributeError,
-)
 def test_run_bfcl_harness_real_construction_with_dict_schemas():
     """Integration-style probe: really construct the graph BFCL would use.
 
     BFCL ships function schemas as bare dicts (``{"name": ..., "parameters":
-    ...}``), not ``StructuredTool`` instances.  ``ToolCallingTaskGraph.__init__``
-    does ``{t.name: t for t in tools}`` and therefore crashes on dicts.
+    ...}``), not ``StructuredTool`` instances. Previously
+    ``ToolCallingTaskGraph.__init__`` did ``{t.name: t for t in tools}`` and
+    crashed on dicts (Finding F2).
 
-    The previous unit test above patches ``build_condition`` away, so the
-    crash never surfaces.  This test calls the real ``build_condition``.  It is
-    marked xfail (AttributeError) so the regression is visible in the test
-    report — when F2 is fixed (EmitOnlyToolCallingTaskGraph accepting dict
-    schemas), this test will xpass and the marker should be removed.
+    With the F2 fix, ``run_bfcl_harness`` now routes through
+    ``EmitOnlyToolCallingTaskGraph``, which accepts bare dict schemas and
+    emits — rather than executes — the tool call. This test verifies the
+    real construction path no longer crashes.
     """
     from benchmarks.conditions import build_condition
 
-    # Currently raises:
-    #     AttributeError: 'dict' object has no attribute 'name'
-    build_condition(
+    agent = build_condition(
         condition="C1",
         model="qwen3.5:2b",
-        task_graph_kind="tool_calling",
+        task_graph_kind="emit_only_tool_calling",
         tools=_SAMPLE_TASK["functions"],  # list[dict], not list[StructuredTool]
     )
+    # Construction alone is the regression check; we shouldn't reach an LLM.
+    assert agent is not None
+    from smboost.tasks.emit_only_tool_calling import EmitOnlyToolCallingTaskGraph
+    assert isinstance(agent._harness._task_graph, EmitOnlyToolCallingTaskGraph)

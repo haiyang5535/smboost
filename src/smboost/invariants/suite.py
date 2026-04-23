@@ -64,3 +64,20 @@ class InvariantSuite:
             "generate": ([], [output_is_nonempty]),
             "verify":   ([], [output_is_nonempty, verify_says_pass]),
         })
+
+    @staticmethod
+    def emit_only_tool_calling() -> InvariantSuite:
+        """Invariants for the emit-only tool-calling graph (BFCL).
+
+        The generate node must produce nonempty output (a JSON call). The verify
+        node is structural-only (PASS/FAIL), so we demand it says PASS — but we
+        do NOT require the generate output to be valid JSON as an invariant,
+        because the verify node itself produces the authoritative structural
+        judgement and a soft-fail there should trigger retry/shrinkage rather
+        than an invariant violation on `generate`.
+        """
+        return InvariantSuite({
+            "plan":     ([], [output_is_nonempty]),
+            "generate": ([], [output_is_nonempty]),
+            "verify":   ([], [output_is_nonempty, verify_says_pass]),
+        })
