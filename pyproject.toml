@@ -16,6 +16,11 @@ dev = [
 benchmark = [
     "human-eval>=1.0",
 ]
+bench = [
+    "evalplus>=0.3.0",
+    "requests>=2.31.0",
+    "human-eval>=1.0.3",
+]
 
 [build-system]
 requires = ["hatchling"]
