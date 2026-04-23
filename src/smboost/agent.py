@@ -1,11 +1,14 @@
 from __future__ import annotations
+import json
 import time
+import uuid
+from pathlib import Path
 from typing import Callable
 from typing import TYPE_CHECKING
 
 from smboost.harness.graph import HarnessGraph
 from smboost.harness.result import HarnessResult, RunStats
-from smboost.harness.state import HarnessState
+from smboost.harness.state import HarnessState, StepOutput
 from smboost.memory.session import SessionMemory
 from smboost.scorer import RobustnessScorer
 from smboost.tasks.coding import CodingTaskGraph
@@ -13,6 +16,18 @@ from smboost.tasks.coding import CodingTaskGraph
 if TYPE_CHECKING:
     from smboost.invariants.suite import InvariantSuite
     from smboost.tasks.base import TaskGraph
+
+
+_MAX_STR_LEN = 2000
+_TRUNC_MARKER = "...[truncated]"
+
+
+def _truncate(s: str | None) -> str | None:
+    if s is None:
+        return None
+    if len(s) <= _MAX_STR_LEN:
+        return s
+    return s[:_MAX_STR_LEN] + _TRUNC_MARKER
 
 
 class HarnessAgent:
@@ -30,6 +45,7 @@ class HarnessAgent:
         shrinkage_enabled: bool = True,
         scorer_enabled: bool = True,
         llm_factory: Callable[[str], object] | None = None,
+        trace_log_path: Path | str | None = None,
     ):
         self.model = model
         self.scorer = scorer
@@ -38,6 +54,7 @@ class HarnessAgent:
         self.session_memory = session_memory
         self.shrinkage_enabled = shrinkage_enabled
         self.scorer_enabled = scorer_enabled
+        self.trace_log_path = Path(trace_log_path) if trace_log_path is not None else None
         self._memory = SessionMemory() if session_memory else None
         self._harness = HarnessGraph(
             task_graph=task_graph or CodingTaskGraph(),
@@ -48,7 +65,13 @@ class HarnessAgent:
             llm_factory=llm_factory,
         )
 
-    def run(self, task: str, task_metadata: dict | None = None) -> HarnessResult:
+    def run(
+        self,
+        task: str,
+        task_metadata: dict | None = None,
+        task_id: str | None = None,
+        condition: str | None = None,
+    ) -> HarnessResult:
         from smboost.tasks import completion as comp_mod
 
         initial: HarnessState = {
@@ -65,14 +88,43 @@ class HarnessAgent:
             "final_output": None,
         }
 
+        run_id = uuid.uuid4().hex
+        wall_start = time.monotonic()
+
+        # Open the trace file (append mode) for the duration of this run, if configured.
+        trace_fh = None
+        if self.trace_log_path is not None:
+            self.trace_log_path.parent.mkdir(parents=True, exist_ok=True)
+            trace_fh = open(self.trace_log_path, "a", encoding="utf-8")
+            self._emit_run_start(trace_fh, run_id, task_id, condition)
+
+        final: HarnessState | None = None
+        exc_raised: BaseException | None = None
         start = time.monotonic()
         token = comp_mod._ACTIVE_MEMORY.set(self._memory if self.session_memory else None)
         try:
-            final = self._harness.invoke(initial)
+            try:
+                final = self._harness.invoke(initial)
+            except BaseException as exc:  # re-raised in outer finally via exc_raised
+                exc_raised = exc
+                raise
         finally:
             comp_mod._ACTIVE_MEMORY.reset(token)
-        elapsed = round(time.monotonic() - start, 3)
+            elapsed = round(time.monotonic() - start, 3)
+            if trace_fh is not None:
+                try:
+                    steps = final["step_outputs"] if final is not None else []
+                    for idx, step in enumerate(steps):
+                        self._emit_step(trace_fh, run_id, task_id, condition, idx, step, final)
+                    passed = final is not None and final.get("status") == "success"
+                    retries = final["retry_count"] if final is not None else 0
+                    final_code = final.get("final_output") if final is not None else None
+                    wall_ms = int((time.monotonic() - wall_start) * 1000)
+                    self._emit_summary(trace_fh, run_id, passed, retries, wall_ms, final_code)
+                finally:
+                    trace_fh.close()
 
+        assert final is not None  # if we got here without exc, invoke returned
         steps = final["step_outputs"]
 
         return HarnessResult(
@@ -86,6 +138,88 @@ class HarnessAgent:
             ),
             status=final["status"],  # type: ignore[arg-type]
         )
+
+    @staticmethod
+    def _write_json_line(fh, obj: dict) -> None:
+        fh.write(json.dumps(obj, ensure_ascii=False, default=str))
+        fh.write("\n")
+        fh.flush()
+
+    def _emit_run_start(
+        self,
+        fh,
+        run_id: str,
+        task_id: str | None,
+        condition: str | None,
+    ) -> None:
+        self._write_json_line(fh, {
+            "schema_version": 1,
+            "run_id": run_id,
+            "task_id": task_id,
+            "model": self.model,
+            "condition": condition,
+            "event": "run_start",
+        })
+
+    def _emit_step(
+        self,
+        fh,
+        run_id: str,
+        task_id: str | None,
+        condition: str | None,
+        step_idx: int,
+        step: StepOutput,
+        final_state: HarnessState | None,
+    ) -> None:
+        now_ts = time.time()
+        record = {
+            "run_id": run_id,
+            "task_id": task_id,
+            "model": step.model if getattr(step, "model", None) else self.model,
+            "condition": condition,
+            "step_idx": step_idx,
+            "node": step.node,
+            "entry_ts": now_ts,
+            "exit_ts": now_ts,
+            "retry_count": final_state["retry_count"] if final_state is not None else None,
+            "shrinkage_level": final_state["shrinkage_level"] if final_state is not None else None,
+            "scorer_confidence": step.confidence,
+            "input": {
+                "prompt": None,
+                "budget": None,
+            },
+            "output": {
+                "code": _truncate(step.output),
+                "trunc": bool(step.output) and len(step.output) > _MAX_STR_LEN,
+            },
+            "verify": {
+                "kind": None,
+                "passed": step.passed,
+                "traceback": None,
+            },
+            "fallback_triggered": (
+                final_state is not None and final_state.get("fallback_index", 0) > 0
+            ),
+        }
+        self._write_json_line(fh, record)
+
+    @staticmethod
+    def _emit_summary(
+        fh,
+        run_id: str,
+        passed: bool,
+        retries: int,
+        wall_ms: int,
+        final_code: str | None,
+    ) -> None:
+        HarnessAgent._write_json_line(fh, {
+            "run_id": run_id,
+            "event": "summary",
+            "passed": bool(passed),
+            "retries": int(retries),
+            "wall_ms": int(wall_ms),
+            "final_code": _truncate(final_code) if final_code is not None else None,
+        })
 
     def set_memory_log(self, log_path) -> None:
         if self._memory is not None and log_path is not None:
