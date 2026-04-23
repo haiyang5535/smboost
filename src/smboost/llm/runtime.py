@@ -38,7 +38,14 @@ class _BenchmarkLlamaCppLocalFactory(LlamaCppLocalFactory):
 
 
 class _CompatibleChatOpenAI(ChatOpenAI):
-    """Preserve top-level max_tokens for OpenAI-compatible local servers."""
+    """Preserve top-level max_tokens for OpenAI-compatible local servers.
+
+    Warning:
+        This class subclasses private LangChain API — ``_default_params`` and
+        ``_get_request_payload``.  Tested against ``langchain-openai==1.1.x``.
+        Because the API is private, the dependency in ``pyproject.toml`` is
+        pinned to ``>=1.0,<2.0``; re-test before loosening the upper bound.
+    """
 
     @property
     def _default_params(self) -> dict[str, object]:
