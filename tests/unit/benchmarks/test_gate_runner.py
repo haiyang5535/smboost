@@ -104,12 +104,19 @@ def test_run_humaneval_harness_real_construction_two_tasks():
         },
     ]
 
-    # Pretend evalplus scored both tasks as passing.  Real contract shape:
-    # { task_id: {"base": {"passed": bool}, "plus": {"passed": bool}} }
-    fake_eval_map = {
-        "HEval/add":  {"base": {"passed": True},  "plus": {"passed": True}},
-        "HEval/add2": {"base": {"passed": False}, "plus": {"passed": False}},
-    }
+    # Stub the subset-tolerant HE evaluator (the gate runner's current path —
+    # see benchmarks/humaneval_plus/simple_eval.py).  Real contract shape:
+    # HumanEvalPlusResult(pass_at_1_base, pass_at_1_plus, rows=[{task_id, completion, passed_heval, passed_heval_plus}, ...]).
+    fake_result = HumanEvalPlusResult(
+        pass_at_1_base=0.5,
+        pass_at_1_plus=0.5,
+        rows=[
+            {"task_id": "HEval/add", "completion": canned_completion,
+             "passed_heval": 1, "passed_heval_plus": 1},
+            {"task_id": "HEval/add2", "completion": canned_completion,
+             "passed_heval": 0, "passed_heval_plus": 0},
+        ],
+    )
 
     cfg = GateConfig(
         name="G_real_smoke",
@@ -124,8 +131,8 @@ def test_run_humaneval_harness_real_construction_two_tasks():
         "benchmarks.conditions.get_benchmark_llm_factory",
         return_value=_fake_llm_factory,
     ), patch(
-        "benchmarks.humaneval_plus.runner._evalplus_evaluate",
-        return_value=fake_eval_map,
+        "benchmarks.humaneval_plus.simple_eval.evaluate_base_subset",
+        return_value=fake_result,
     ):
         rows = run_gate(cfg)
 
