@@ -1,10 +1,41 @@
 """Execute one gate: load N tasks for a benchmark, run them under each
 (model, condition) config, return flat row list suitable for the criteria
 module.
+
+HumanEval+ scoring path:
+  - If env var `SMBOOST_USE_EVALPLUS_SUBSET=1` is set, use the real
+    HumanEval+ scorer at
+    `benchmarks.humaneval_plus.evalplus_eval.evaluate_subset`, which pads
+    the submission to 164 problems internally and gives correct per-task
+    `passed_heval_plus` values from the ~80x plus-tests.
+  - Otherwise prefer the subprocess-based
+    `benchmarks.humaneval_plus.simple_eval.evaluate_base_subset` (base
+    HumanEval only; avoids evalplus multiprocessing issues on some
+    Python/macOS configurations). `passed_heval_plus` mirrors `passed_heval`.
+  - Fall back to `runner.evaluate_dual` if `simple_eval` isn't importable;
+    this path assumes the caller has submitted completions for all 164
+    HumanEval problems.
+See `docs/superpowers/research/2026-04-23-evalplus-he-plus-fix.md`.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+
+
+def _evaluate_humaneval_dual(results: list[dict]):
+    """Resolve the HumanEval+ evaluator at call-time so tests can patch the
+    underlying `simple_eval.evaluate_base_subset` (or `runner.evaluate_dual`)
+    at their source module. Selection order matches the module docstring."""
+    if os.getenv("SMBOOST_USE_EVALPLUS_SUBSET"):
+        from benchmarks.humaneval_plus.evalplus_eval import evaluate_subset
+        return evaluate_subset(results)
+    try:
+        from benchmarks.humaneval_plus import simple_eval
+        return simple_eval.evaluate_base_subset(results)
+    except ImportError:
+        from benchmarks.humaneval_plus.runner import evaluate_dual
+        return evaluate_dual(results)
 
 
 @dataclass
@@ -30,10 +61,9 @@ def _load_tasks_for_bench(bench: str, n: int) -> list[dict]:
 
 def _run_humaneval_raw(tasks: list[dict], model: str) -> list[dict]:
     from benchmarks.run_humaneval import run_baseline
-    from benchmarks.humaneval_plus.simple_eval import evaluate_base_subset as evaluate_dual
 
     results = run_baseline(tasks, model)
-    eval_out = evaluate_dual(results)
+    eval_out = _evaluate_humaneval_dual(results)
     return [
         {
             "task_id": r["task_id"],
@@ -67,7 +97,6 @@ def _run_humaneval_harness(
     the whole harness inert on HumanEval gate data.
     """
     from benchmarks.conditions import build_condition
-    from benchmarks.humaneval_plus.simple_eval import evaluate_base_subset as evaluate_dual
     from benchmarks.run_humaneval import clean_completion
 
     results: list[dict] = []
@@ -100,7 +129,7 @@ def _run_humaneval_harness(
                 "retries": run.stats.retry_count,
             }
         )
-    eval_out = evaluate_dual(results)
+    eval_out = _evaluate_humaneval_dual(results)
     return [
         {
             "task_id": r["task_id"],

@@ -47,6 +47,9 @@ packages = ["src/smboost"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: requires running Ollama with qwen3.5:2b pulled"]
-addopts = "-m 'not integration'"
+markers = [
+    "integration: requires running Ollama with qwen3.5:2b pulled",
+    "slow: tests that call into evalplus (≥10s wall clock); deselected by default",
+]
+addopts = "-m 'not integration and not slow'"
 pythonpath = ["."]
