@@ -66,8 +66,8 @@ class TraceStepRecord:
     node: str
     entry_ts: float
     exit_ts: float
-    retry_count: int
-    shrinkage_level: int
+    retry_count: int | None
+    shrinkage_level: int | None
     input: TraceStepInput
     output: TraceStepOutput
     verify: TraceStepVerify

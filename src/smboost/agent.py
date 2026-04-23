@@ -9,6 +9,12 @@ from typing import TYPE_CHECKING
 from smboost.harness.graph import HarnessGraph
 from smboost.harness.result import HarnessResult, RunStats
 from smboost.harness.state import HarnessState, StepOutput
+from smboost.harness.trace_schema import (
+    TraceStepInput,
+    TraceStepOutput,
+    TraceStepRecord,
+    TraceStepVerify,
+)
 from smboost.llm.runtime import get_default_llm_factory
 from smboost.memory.session import SessionMemory
 from smboost.scorer import RobustnessScorer
@@ -177,36 +183,29 @@ class HarnessAgent:
         final_state: HarnessState | None,
     ) -> None:
         now_ts = time.time()
-        record = {
-            "run_id": run_id,
-            "task_id": task_id,
-            "model": step.model if getattr(step, "model", None) else self.model,
-            "condition": condition,
-            "step_idx": step_idx,
-            "node": step.node,
-            "entry_ts": now_ts,
-            "exit_ts": now_ts,
-            "retry_count": final_state["retry_count"] if final_state is not None else None,
-            "shrinkage_level": final_state["shrinkage_level"] if final_state is not None else None,
-            "scorer_confidence": step.confidence,
-            "input": {
-                "prompt": None,
-                "budget": None,
-            },
-            "output": {
-                "code": _truncate(step.output),
-                "trunc": bool(step.output) and len(step.output) > _MAX_STR_LEN,
-            },
-            "verify": {
-                "kind": None,
-                "passed": step.passed,
-                "traceback": None,
-            },
-            "fallback_triggered": (
+        record = TraceStepRecord(
+            run_id=run_id,
+            task_id=task_id,
+            model=step.model if getattr(step, "model", None) else self.model,
+            condition=condition,
+            step_idx=step_idx,
+            node=step.node,
+            entry_ts=now_ts,
+            exit_ts=now_ts,
+            retry_count=final_state["retry_count"] if final_state is not None else None,
+            shrinkage_level=final_state["shrinkage_level"] if final_state is not None else None,
+            scorer_confidence=step.confidence,
+            input=TraceStepInput(prompt=None, budget=None),
+            output=TraceStepOutput(
+                code=_truncate(step.output),
+                trunc=bool(step.output) and len(step.output) > _MAX_STR_LEN,
+            ),
+            verify=TraceStepVerify(kind=None, passed=step.passed, traceback=None),
+            fallback_triggered=(
                 final_state is not None and final_state.get("fallback_index", 0) > 0
             ),
-        }
-        self._write_json_line(fh, record)
+        )
+        self._write_json_line(fh, record.to_json_dict())
 
     @staticmethod
     def _emit_summary(
