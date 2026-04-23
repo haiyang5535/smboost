@@ -30,7 +30,7 @@ def _load_tasks_for_bench(bench: str, n: int) -> list[dict]:
 
 def _run_humaneval_raw(tasks: list[dict], model: str) -> list[dict]:
     from benchmarks.run_humaneval import run_baseline
-    from benchmarks.humaneval_plus.runner import evaluate_dual
+    from benchmarks.humaneval_plus.simple_eval import evaluate_base_subset as evaluate_dual
 
     results = run_baseline(tasks, model)
     eval_out = evaluate_dual(results)
@@ -57,7 +57,7 @@ def _run_humaneval_harness(
 ) -> list[dict]:
     """Run through a C1-C6 harness condition. Returns row dicts (HE+ scored)."""
     from benchmarks.conditions import build_condition
-    from benchmarks.humaneval_plus.runner import evaluate_dual
+    from benchmarks.humaneval_plus.simple_eval import evaluate_base_subset as evaluate_dual
     from benchmarks.run_humaneval import clean_completion
 
     results: list[dict] = []
