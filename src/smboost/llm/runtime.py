@@ -90,7 +90,7 @@ def _cached_openai_factory(
     return _factory
 
 
-def get_benchmark_llm_factory() -> Callable[[str], object]:
+def get_default_llm_factory() -> Callable[[str], object]:
     backend = os.environ.get("SMBOOST_LLM_BACKEND", "server").lower()
 
     if backend == "local":
@@ -111,3 +111,10 @@ def get_benchmark_llm_factory() -> Callable[[str], object]:
         )
 
     raise ValueError(f"Unsupported SMBOOST_LLM_BACKEND: {backend}")
+
+
+# Backward-compatible alias. Older callers in the codebase (and external probes)
+# referenced `get_benchmark_llm_factory`; the new canonical name is
+# `get_default_llm_factory` because the same factory is now also used as the
+# default when `HarnessAgent(..., llm_factory=None)`.
+get_benchmark_llm_factory = get_default_llm_factory
