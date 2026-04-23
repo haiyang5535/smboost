@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Callable
 
 from smboost import HarnessAgent, InvariantSuite
+from smboost.llm.runtime import get_benchmark_llm_factory
 from smboost.tasks.completion import CompletionTaskGraph
 
 
@@ -16,6 +17,7 @@ def _build(model: str, seed: int, *, grounded: bool, memory: bool,
         session_memory=memory,
         shrinkage_enabled=shrinkage,
         scorer_enabled=scorer,
+        llm_factory=get_benchmark_llm_factory(),
     )
 
 

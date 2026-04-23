@@ -1,5 +1,6 @@
 from __future__ import annotations
 import time
+from typing import Callable
 from typing import TYPE_CHECKING
 
 from smboost.harness.graph import HarnessGraph
@@ -28,6 +29,7 @@ class HarnessAgent:
         session_memory: bool = True,
         shrinkage_enabled: bool = True,
         scorer_enabled: bool = True,
+        llm_factory: Callable[[str], object] | None = None,
     ):
         self.model = model
         self.scorer = scorer
@@ -43,6 +45,7 @@ class HarnessAgent:
             max_retries=max_retries,
             scorer=RobustnessScorer(threshold=scorer_threshold) if scorer_enabled else None,
             shrinkage_enabled=shrinkage_enabled,
+            llm_factory=llm_factory,
         )
 
     def run(self, task: str, task_metadata: dict | None = None) -> HarnessResult:

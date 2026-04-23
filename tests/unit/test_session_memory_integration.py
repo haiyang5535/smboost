@@ -47,6 +47,68 @@ def test_generate_prompt_includes_previous_failure_when_memory_on(monkeypatch):
     assert "AssertionError" in captured["prompt"]
 
 
+def test_small_model_stdin_prompt_skips_memory_hints():
+    mem = SessionMemory()
+    mem.record(task_id="t_live", node="verify", attempt=0,
+               error_class="AssertionError",
+               error_line="assert f() == 1",
+               traceback_tail="AssertionError\nassert f() == 1",
+               first_assertion="assert f() == 1",
+               prompt_used="prompt")
+
+    token = comp_mod._ACTIVE_MEMORY.set(mem)
+    try:
+        captured = {}
+
+        class FakeLLM:
+            def invoke(self, messages):
+                captured["prompt"] = messages[0].content
+                class R:
+                    content = "import sys\n\ndef solve():\n    pass"
+                return R()
+
+        state = _base_state("problem text", shrinkage=2)
+        state["model"] = "qwen3.5:2b"
+        state["task_metadata"] = {"task_id": "t_live", "testtype": "stdin"}
+        comp_mod._generate_node(state, FakeLLM())
+    finally:
+        comp_mod._ACTIVE_MEMORY.reset(token)
+
+    assert "Previous attempts failed" not in captured["prompt"]
+    assert "Avoid the same pattern." not in captured["prompt"]
+
+
+def test_non_stdin_small_model_still_uses_memory_hints():
+    mem = SessionMemory()
+    mem.record(task_id="t_live", node="verify", attempt=0,
+               error_class="AssertionError",
+               error_line="assert f() == 1",
+               traceback_tail="AssertionError\nassert f() == 1",
+               first_assertion="assert f() == 1",
+               prompt_used="prompt")
+
+    token = comp_mod._ACTIVE_MEMORY.set(mem)
+    try:
+        captured = {}
+
+        class FakeLLM:
+            def invoke(self, messages):
+                captured["prompt"] = messages[0].content
+                class R:
+                    content = "def double(x):\n    return x * 2"
+                return R()
+
+        state = _base_state("def double(x):\n    ", shrinkage=1)
+        state["model"] = "qwen3.5:2b"
+        state["task_metadata"] = {"task_id": "t_live", "testtype": "functional"}
+        comp_mod._generate_node(state, FakeLLM())
+    finally:
+        comp_mod._ACTIVE_MEMORY.reset(token)
+
+    assert "Previous attempts failed" in captured["prompt"]
+    assert "AssertionError" in captured["prompt"]
+
+
 def test_generate_prompt_skips_memory_when_off():
     comp_mod._ACTIVE_MEMORY.set(None)
     captured = {}

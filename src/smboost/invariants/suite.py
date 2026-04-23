@@ -57,3 +57,10 @@ class InvariantSuite:
             "dispatch": ([], [output_is_nonempty]),
             "verify":   ([], [output_is_nonempty, verify_says_pass]),
         })
+
+    @staticmethod
+    def completion() -> InvariantSuite:
+        return InvariantSuite({
+            "generate": ([], [output_is_nonempty]),
+            "verify":   ([], [output_is_nonempty, verify_says_pass]),
+        })

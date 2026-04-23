@@ -11,7 +11,7 @@ from smboost.tasks.base import TaskGraph
 from smboost.tasks._tool_loop import run_tool_loop
 
 if TYPE_CHECKING:
-    from langchain_ollama import ChatOllama
+    from langchain_openai import ChatOpenAI
     from smboost.harness.state import HarnessState
 
 
@@ -43,7 +43,7 @@ _TOOL_MAP_FULL = {t.name: t for t in _TOOLS_FULL}
 _TOOL_MAP_REDUCED = {t.name: t for t in _TOOLS_REDUCED}
 
 
-def _plan_node(state: HarnessState, llm: ChatOllama) -> str:
+def _plan_node(state: HarnessState, llm: ChatOpenAI) -> str:
     level = state["shrinkage_level"]
     task = state["task"]
     if level == 0:
@@ -60,7 +60,7 @@ def _plan_node(state: HarnessState, llm: ChatOllama) -> str:
     return llm.invoke([HumanMessage(content=prompt)]).content or ""
 
 
-def _execute_node(state: HarnessState, llm: ChatOllama) -> str:
+def _execute_node(state: HarnessState, llm: ChatOpenAI) -> str:
     level = state["shrinkage_level"]
     plan = state["step_outputs"][-1].output if state["step_outputs"] else ""
     task = state["task"]
@@ -80,7 +80,7 @@ def _execute_node(state: HarnessState, llm: ChatOllama) -> str:
     return run_tool_loop(llm.bind_tools(tools), [HumanMessage(content=prompt)], tool_map)
 
 
-def _verify_node(state: HarnessState, llm: ChatOllama) -> str:
+def _verify_node(state: HarnessState, llm: ChatOpenAI) -> str:
     level = state["shrinkage_level"]
     last_output = state["step_outputs"][-1].output if state["step_outputs"] else ""
     task = state["task"]

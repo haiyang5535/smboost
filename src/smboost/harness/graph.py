@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Callable
 from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
@@ -21,13 +22,24 @@ class HarnessGraph:
         max_retries: int = 3,
         scorer: RobustnessScorer | None = None,
         shrinkage_enabled: bool = True,
+        llm_factory: Callable[[str], object] | None = None,
     ):
         self._task_graph = task_graph
         self._suite = invariant_suite
         self._max_retries = max_retries
         self._scorer = scorer  # None means no self-consistency scoring
         self._shrinkage_enabled = shrinkage_enabled
+        self._llm_factory = llm_factory or self._default_llm_factory
         self._compiled = self._build()
+
+    @staticmethod
+    def _default_llm_factory(model: str):
+        return ChatOpenAI(
+            base_url="http://localhost:8000/v1",
+            api_key="sk-no-key",
+            model=model,
+            max_tokens=4096,
+        )
 
     def _build(self):
         g = StateGraph(HarnessState)
@@ -39,6 +51,20 @@ class HarnessGraph:
             {"execute_step": "execute_step", END: END},
         )
         return g.compile()
+
+    @staticmethod
+    def _should_bypass_scorer(
+        *,
+        node_name: str,
+        state: HarnessState,
+        model: str,
+    ) -> bool:
+        meta = state.get("task_metadata") or {}
+        return (
+            node_name in {"generate", "verify"}
+            and meta.get("testtype") == "stdin"
+            and model in {"qwen3.5:0.8b", "qwen3.5:2b"}
+        )
 
     def _execute_step(self, state: HarnessState) -> dict:
         retry_count = state["retry_count"]
@@ -66,12 +92,7 @@ class HarnessGraph:
                 "status": "running",
             }
 
-        llm = ChatOpenAI(
-            base_url="http://localhost:8000/v1",
-            api_key="sk-no-key",
-            model=current_model,
-            max_tokens=4096,
-        )
+        llm = self._llm_factory(current_model)
         node_fn = self._task_graph.get_node_fn(node_name)
         try:
             output = node_fn(state, llm)
@@ -83,7 +104,11 @@ class HarnessGraph:
         passed = node_exception is None and all(inv(state, output) for inv in exit_invs)
 
         if not passed:
-            if self._scorer is not None:
+            if self._scorer is not None and not self._should_bypass_scorer(
+                node_name=node_name,
+                state=state,
+                model=current_model,
+            ):
                 best_output, confidence = self._scorer.score(node_fn, state, llm)
             else:
                 best_output, confidence = output, 0.0

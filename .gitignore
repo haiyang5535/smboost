@@ -29,3 +29,7 @@ models/
 # Ollama Modelfiles — local-only
 Modelfile
 Modelfile-*
+
+# Logs
+*.log
+benchmarks/data/*.jsonl

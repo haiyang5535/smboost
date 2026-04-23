@@ -1,6 +1,7 @@
 from __future__ import annotations
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
@@ -14,6 +15,10 @@ from langchain_core.messages import HumanMessage
 
 from smboost.memory.session import SessionMemory
 from smboost.tasks.base import TaskGraph
+from smboost.tasks.stdin_skeletons import (
+    build_small_model_stdin_prompt,
+    shrink_small_model_stdin_problem,
+)
 
 if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
@@ -46,15 +51,86 @@ def _clean(raw: str) -> str:
     return cleaned
 
 
+def _is_small_model(model: str) -> bool:
+    return model in {"qwen3.5:0.8b", "qwen3.5:2b"}
+
+
+def _looks_like_python_program(text: str) -> bool:
+    stripped = text.lstrip()
+    if not stripped:
+        return False
+    return stripped.startswith((
+        "import ",
+        "from ",
+        "def ",
+        "class ",
+        "if ",
+        "for ",
+        "while ",
+        "try:",
+        "#!",
+    ))
+
+
+def _should_use_memory_hints(*, model: str, testtype: str) -> bool:
+    return not (testtype == "stdin" and _is_small_model(model))
+
+
+def _generation_budget() -> int | None:
+    for name in ("SMBOOST_OPENAI_MAX_TOKENS", "SMBOOST_LOCAL_MAX_TOKENS"):
+        value = os.getenv(name)
+        if value:
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
+
+
+def _effective_small_model_stdin_level(level: int) -> int:
+    budget = _generation_budget()
+    if budget is not None and budget <= 64:
+        return max(level, 2)
+    return level
+
+
+def _should_force_tighter_small_model_stdin_prompt(state: HarnessState) -> bool:
+    budget = _generation_budget()
+    if budget is None or budget > 64:
+        return False
+    steps = state.get("step_outputs") or []
+    if not steps:
+        return False
+    last = steps[-1]
+    return last.node == "verify" and not last.passed
+
+
 def _generate_node(state: HarnessState, llm) -> str:
     task = state["task"]
+    model = state["model"]
     level = state["shrinkage_level"]
     meta = state.get("task_metadata") or {}
     testtype = meta.get("testtype", "")
     entry_point = meta.get("entry_point", "")
 
     if testtype == "stdin":
-        if level == 0:
+        if _is_small_model(model):
+            effective_level = _effective_small_model_stdin_level(level)
+            if _should_force_tighter_small_model_stdin_prompt(state):
+                effective_level = max(effective_level, 3)
+            if effective_level <= 1:
+                prompt = build_small_model_stdin_prompt(task)
+            elif effective_level == 2:
+                prompt = build_small_model_stdin_prompt(
+                    shrink_small_model_stdin_problem(task, max_chars=900),
+                    compact=True,
+                )
+            else:
+                prompt = build_small_model_stdin_prompt(
+                    shrink_small_model_stdin_problem(task, max_chars=450),
+                    compact=True,
+                )
+        elif level == 0:
             prompt = (
                 "Solve the following competitive programming problem. "
                 "Write a complete Python program that reads from stdin and writes to stdout. "
@@ -107,7 +183,7 @@ def _generate_node(state: HarnessState, llm) -> str:
             prompt = task[:800]
 
     mem = _ACTIVE_MEMORY.get()
-    if mem is not None:
+    if mem is not None and _should_use_memory_hints(model=model, testtype=testtype):
         task_id = (state.get("task_metadata") or {}).get("task_id", "")
         recent = mem.recent_for_task(task_id, limit=2) if task_id else []
         if recent:
@@ -131,7 +207,10 @@ def _generate_node(state: HarnessState, llm) -> str:
 
     # /no_think disables Qwen3's extended thinking mode so the model responds directly
     raw = llm.invoke([HumanMessage(content="/no_think\n\n" + prompt)]).content or ""
-    return _clean(raw)
+    cleaned = _clean(raw)
+    if testtype == "stdin" and _is_small_model(model) and not _looks_like_python_program(cleaned):
+        return ""
+    return cleaned
 
 
 def _entry_point_caller(entry_point: str) -> str:
@@ -226,9 +305,9 @@ def _make_functional_assertions(entry_point: str, test_cases: list) -> str:
     lines = []
     for tc in test_cases:
         try:
-            args = json.loads(tc["input"])
-            if not isinstance(args, list):
-                args = [args]
+            # LCB format: one JSON value per line, each line = one positional argument
+            raw_lines = tc["input"].split("\n")
+            args = [json.loads(ln) for ln in raw_lines if ln.strip()]
             arg_repr = ", ".join(repr(a) for a in args)
         except (json.JSONDecodeError, TypeError):
             arg_repr = repr(tc["input"])
@@ -238,6 +317,50 @@ def _make_functional_assertions(entry_point: str, test_cases: list) -> str:
             expected = tc["output"]
         lines.append(f"assert {caller}({arg_repr}) == {expected!r}")
     return "\n".join(lines)
+
+
+def _wrap_stdin_solve_entrypoint(completion: str) -> str:
+    """Call a top-level solve() during verify if the model forgot the entrypoint."""
+    try:
+        tree = ast.parse(completion)
+    except SyntaxError:
+        return completion
+
+    has_top_level_solve = any(
+        isinstance(node, ast.FunctionDef) and node.name == "solve"
+        for node in tree.body
+    )
+    if not has_top_level_solve:
+        return completion
+
+    class _ModuleLevelSolveCallFinder(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.found = False
+
+        def visit_FunctionDef(self, node):
+            return None
+
+        def visit_AsyncFunctionDef(self, node):
+            return None
+
+        def visit_ClassDef(self, node):
+            return None
+
+        def visit_Call(self, node):
+            if isinstance(node.func, ast.Name) and node.func.id == "solve":
+                self.found = True
+                return None
+            self.generic_visit(node)
+
+    finder = _ModuleLevelSolveCallFinder()
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        finder.visit(stmt)
+        if finder.found:
+            return completion
+
+    return completion.rstrip() + "\n\nif __name__ == '__main__':\n    solve()\n"
 
 
 def _run_subprocess(src: str, stdin_data: str = "", timeout: int = 12) -> dict:
@@ -357,9 +480,10 @@ def _verify_grounded(state: HarnessState, _llm) -> str:
         test_cases = meta.get("test_cases", [])
         if not test_cases:
             return _verify_ast_only(state, _llm)
+        src = _wrap_stdin_solve_entrypoint(completion)
         result = {"passed": True, "traceback": "", "stdout": ""}
         for tc in test_cases:
-            result = _run_subprocess(completion, stdin_data=tc.get("input", ""))
+            result = _run_subprocess(src, stdin_data=tc.get("input", ""))
             if not result["passed"]:
                 break
             if tc.get("output", "").strip() != result["stdout"].strip():

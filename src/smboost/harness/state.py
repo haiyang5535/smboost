@@ -14,6 +14,7 @@ class StepOutput:
 
 class HarnessState(TypedDict):
     task: str
+    task_metadata: dict
     model: str
     fallback_chain: list[str]
     step_outputs: list[StepOutput]

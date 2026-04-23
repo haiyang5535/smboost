@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 
@@ -29,8 +29,8 @@ def clean_completion(raw: str) -> str:
 
 
 def run_baseline(tasks: list[dict], model: str) -> list[dict]:
-    """Run each task through raw ChatOllama (no harness). Returns list of result dicts."""
-    llm = ChatOllama(model=model)
+    """Run each task through raw ChatOpenAI (no harness). Returns list of result dicts."""
+    llm = ChatOpenAI(model=model, base_url="http://localhost:8000/v1", api_key="sk-no-key")
     results = []
     for task in tasks:
         start = time.monotonic()
@@ -45,21 +45,27 @@ def run_baseline(tasks: list[dict], model: str) -> list[dict]:
 
 
 def run_smboost(tasks: list[dict], model: str, scorer_threshold: float = 0.6) -> list[dict]:
-    """Run each task through HarnessAgent. Returns list of result dicts."""
+    """Run each task through HarnessAgent with a CompletionTaskGraph. Returns list of result dicts."""
     from smboost import HarnessAgent, InvariantSuite
+    from smboost.tasks.completion import CompletionTaskGraph
 
     agent = HarnessAgent(
         model=model,
-        invariants=InvariantSuite.coding_agent(),
+        invariants=InvariantSuite.completion(),
         fallback_chain=[model],
         scorer_threshold=scorer_threshold,
+        task_graph=CompletionTaskGraph(),
     )
     results = []
     for task in tasks:
         result = agent.run(task["prompt"])
+        generate_output = ""
+        for step in result.trace:
+            if step.node == "generate":
+                generate_output = step.output
         results.append({
             "task_id": task["task_id"],
-            "completion": clean_completion(result.output or ""),
+            "completion": clean_completion(generate_output),
             "latency_s": result.stats.total_latency_s,
             "retries": result.stats.retry_count,
         })

@@ -42,6 +42,45 @@ def test_verify_node_grounded_fail_with_traceback():
     assert "assert" in result.lower() or "error" in result.lower()
 
 
+def test_verify_node_grounded_stdin_wraps_top_level_solve():
+    graph = CompletionTaskGraph(grounded_verify=True)
+    state = _state(
+        "import sys\n\n"
+        "def solve():\n"
+        "    print(int(sys.stdin.read().strip()) + 1)\n",
+        {"testtype": "stdin", "test_cases": [{"input": "5\n", "output": "6\n"}]},
+    )
+    result = graph.get_node_fn("verify")(state, MagicMock())
+    assert result == "PASS"
+
+
+def test_verify_node_grounded_stdin_keeps_existing_solve_call():
+    graph = CompletionTaskGraph(grounded_verify=True)
+    state = _state(
+        "import sys\n\n"
+        "def solve():\n"
+        "    print(int(sys.stdin.read().strip()) + 1)\n\n"
+        "if __name__ == '__main__':\n"
+        "    solve()\n",
+        {"testtype": "stdin", "test_cases": [{"input": "5\n", "output": "6\n"}]},
+    )
+    result = graph.get_node_fn("verify")(state, MagicMock())
+    assert result == "PASS"
+
+
+def test_verify_node_grounded_stdin_skeleton_program_passes():
+    graph = CompletionTaskGraph(grounded_verify=True)
+    state = _state(
+        "import sys\n\n"
+        "def solve():\n"
+        "    data = sys.stdin.read().strip().split()\n"
+        "    sys.stdout.write(str(int(data[0]) + 1) + '\\n')\n",
+        {"testtype": "stdin", "test_cases": [{"input": "5\n", "output": "6\n"}]},
+    )
+    result = graph.get_node_fn("verify")(state, MagicMock())
+    assert result == "PASS"
+
+
 def test_verify_node_ast_only_when_grounded_off():
     graph = CompletionTaskGraph(grounded_verify=False)
     state = _state(

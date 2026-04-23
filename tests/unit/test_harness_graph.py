@@ -164,6 +164,66 @@ def test_transient_failure_keeps_shrinkage_level_unchanged():
     assert result["retry_count"] == 1
 
 
+def test_small_model_stdin_verify_bypasses_scorer_and_increments_shrinkage():
+    tg = _make_task_graph(["generate", "verify"], output="FAIL: syntax")
+    scorer = _make_mock_scorer(confidence=0.9)
+    graph = HarnessGraph(tg, _fail_suite(["generate", "verify"]), max_retries=3, scorer=scorer)
+
+    with patch("smboost.harness.graph.ChatOpenAI"):
+        result = graph._execute_step(
+            _make_state(
+                current_node_index=1,
+                task_metadata={"testtype": "stdin"},
+                model="qwen3.5:2b",
+            )
+        )
+
+    scorer.score.assert_not_called()
+    assert result["shrinkage_level"] == 1
+    assert result["retry_count"] == 1
+    assert result["step_outputs"][-1].confidence == 0.0
+
+
+def test_small_model_stdin_generate_bypasses_scorer_and_increments_shrinkage():
+    tg = _make_task_graph(["generate", "verify"], output="")
+    scorer = _make_mock_scorer(confidence=0.9)
+    graph = HarnessGraph(tg, _fail_suite(["generate", "verify"]), max_retries=3, scorer=scorer)
+
+    with patch("smboost.harness.graph.ChatOpenAI"):
+        result = graph._execute_step(
+            _make_state(
+                current_node_index=0,
+                task_metadata={"testtype": "stdin"},
+                model="qwen3.5:2b",
+            )
+        )
+
+    scorer.score.assert_not_called()
+    assert result["shrinkage_level"] == 1
+    assert result["retry_count"] == 1
+    assert result["step_outputs"][-1].confidence == 0.0
+
+
+def test_non_stdin_verify_still_uses_scorer():
+    tg = _make_task_graph(["generate", "verify"], output="FAIL: syntax")
+    scorer = _make_mock_scorer(confidence=0.9)
+    graph = HarnessGraph(tg, _fail_suite(["generate", "verify"]), max_retries=3, scorer=scorer)
+
+    with patch("smboost.harness.graph.ChatOpenAI"):
+        result = graph._execute_step(
+            _make_state(
+                current_node_index=1,
+                task_metadata={"testtype": "functional"},
+                model="qwen3.5:2b",
+                shrinkage_level=2,
+            )
+        )
+
+    scorer.score.assert_called_once()
+    assert result["shrinkage_level"] == 2
+    assert result["retry_count"] == 1
+
+
 def test_shrinkage_exhaustion_triggers_early_fallback():
     tg = _make_task_graph(["plan"])
     scorer = _make_mock_scorer(confidence=0.1)  # systematic

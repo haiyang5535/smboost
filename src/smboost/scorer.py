@@ -3,7 +3,7 @@ from difflib import SequenceMatcher
 from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from langchain_ollama import ChatOllama
+    from langchain_openai import ChatOpenAI
     from smboost.harness.state import HarnessState
 
 
@@ -22,7 +22,7 @@ class RobustnessScorer:
         self,
         node_fn: Callable,
         state: HarnessState,
-        llm: ChatOllama,
+        llm: ChatOpenAI,
     ) -> tuple[str, float]:
         """Run node_fn n_samples times; return (centroid_output, confidence).
 

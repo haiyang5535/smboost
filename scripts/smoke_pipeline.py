@@ -5,8 +5,12 @@ Usage:
   python3 scripts/smoke_pipeline.py 2b
 Requires llama.cpp server on localhost:8000 serving the specified model.
 """
+import os
 import sys, textwrap
-sys.path.insert(0, "src")
+from pathlib import Path
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT / "src"))
+sys.path.insert(0, str(_ROOT))
 
 _MODEL_MAP = {
     "0.8b": "qwen3.5:0.8b",
@@ -17,6 +21,7 @@ _MODEL_MAP = {
 
 size = sys.argv[1] if len(sys.argv) > 1 else "0.8b"
 MODEL = _MODEL_MAP.get(size, size)
+BACKEND = os.getenv("SMBOOST_LLM_BACKEND", "server")
 
 from benchmarks.livecodebench.loader import load_livecodebench_tasks
 from benchmarks.livecodebench.conditions import CONDITIONS
@@ -53,6 +58,6 @@ def run_and_print(label: str, task: dict):
     agent.close_memory()
 
 
-print(f"\nSmoke test — model={MODEL}")
+print(f"backend={BACKEND} model={MODEL} tasks={len(tasks)}")
 run_and_print("STDIN", stdin_task)
 run_and_print("FUNCTIONAL", func_task)

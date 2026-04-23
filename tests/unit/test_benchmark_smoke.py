@@ -45,7 +45,7 @@ def test_baseline_runner_calls_llm_per_task():
     mock_llm_cls = MagicMock()
     mock_llm_cls.return_value.invoke.return_value = MagicMock(content="    return a + b")
 
-    with patch("benchmarks.run_humaneval.ChatOllama", mock_llm_cls):
+    with patch("benchmarks.run_humaneval.ChatOpenAI", mock_llm_cls):
         results = run_baseline(tasks, model="qwen3.5:2b")
 
     assert len(results) == 2
