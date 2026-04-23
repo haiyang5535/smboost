@@ -105,3 +105,57 @@ def test_verify_node_detects_syntax_error():
     result = graph.get_node_fn("verify")(state, MagicMock())
     assert result.startswith("FAIL")
     assert "syntax" in result.lower()
+
+
+def test_verify_humaneval_testtype_passes_against_check_script():
+    """testtype='humaneval' builds a script in the HumanEval shape
+    (prompt + completion + test + check(entry_point)) so the harness's verify
+    matches the final ground-truth pass. Without this branch, HumanEval gate
+    runs fell back to AST-only verify and the harness never retried."""
+    graph = CompletionTaskGraph(grounded_verify=True)
+    # The HumanEval prompt ends mid-function; the completion is the body.
+    state = _state(
+        "    return a + b\n",
+        {
+            "testtype": "humaneval",
+            "entry_point": "add",
+            "prompt": "def add(a, b):\n",
+            "test": (
+                "def check(candidate):\n"
+                "    assert candidate(1, 2) == 3\n"
+                "    assert candidate(0, 0) == 0\n"
+            ),
+        },
+    )
+    result = graph.get_node_fn("verify")(state, MagicMock())
+    assert result == "PASS"
+
+
+def test_verify_humaneval_testtype_fails_on_wrong_logic():
+    graph = CompletionTaskGraph(grounded_verify=True)
+    state = _state(
+        "    return a - b\n",  # wrong: subtracts instead of adds
+        {
+            "testtype": "humaneval",
+            "entry_point": "add",
+            "prompt": "def add(a, b):\n",
+            "test": (
+                "def check(candidate):\n"
+                "    assert candidate(1, 2) == 3\n"
+            ),
+        },
+    )
+    result = graph.get_node_fn("verify")(state, MagicMock())
+    assert result.startswith("FAIL")
+
+
+def test_verify_humaneval_testtype_falls_back_when_metadata_incomplete():
+    """Missing fields (no entry_point / no prompt / no test) should fall back to
+    AST-only rather than executing an empty or malformed script."""
+    graph = CompletionTaskGraph(grounded_verify=True)
+    state = _state(
+        "def add(a, b):\n    return a + b\n",
+        {"testtype": "humaneval", "entry_point": "add"},  # missing prompt/test
+    )
+    result = graph.get_node_fn("verify")(state, MagicMock())
+    assert result == "PASS"  # ast-only fallback

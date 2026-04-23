@@ -476,6 +476,50 @@ def _verify_grounded(state: HarnessState, _llm) -> str:
                 first_assertion=first_assertion,
                 prompt_used=state["task"],
             )
+    elif testtype == "humaneval":
+        # HumanEval functional shape: the benchmark provides a `prompt` (def + docstring,
+        # ends mid-function) and a `test` string carrying a `check(candidate)` function.
+        # Verify by running: prompt + completion + test + check(entry_point). Mirrors
+        # benchmarks/humaneval_plus/simple_eval._check_one so the harness's ground-truth
+        # pass matches the evalplus pass.
+        entry_point = meta.get("entry_point", "")
+        he_prompt = meta.get("prompt", "")
+        he_test = meta.get("test", "")
+        if not entry_point or not he_prompt or not he_test:
+            return _verify_ast_only(state, _llm)
+        src = (
+            he_prompt
+            + completion
+            + "\n\n"
+            + he_test
+            + "\n\n"
+            + f"check({entry_point})\n"
+        )
+        result = _run_subprocess(src)
+        # Record failure in session memory
+        mem = _ACTIVE_MEMORY.get()
+        task_id = (state.get("task_metadata") or {}).get("task_id", "")
+        if not result["passed"] and mem is not None and task_id:
+            tb_last = result.get("traceback", "")[-800:]
+            error_type = "Error"
+            for line in reversed(tb_last.splitlines()):
+                if "Error" in line or "Exception" in line:
+                    error_type = line.strip()
+                    break
+            first_assertion = next(
+                (ln.strip() for ln in tb_last.splitlines() if ln.strip().startswith("assert ")),
+                "",
+            )
+            mem.record(
+                task_id=task_id,
+                node="verify",
+                attempt=len(state["step_outputs"]),
+                error_class=error_type,
+                error_line=error_type,
+                traceback_tail=tb_last,
+                first_assertion=first_assertion,
+                prompt_used=state["task"],
+            )
     elif testtype == "stdin":
         test_cases = meta.get("test_cases", [])
         if not test_cases:

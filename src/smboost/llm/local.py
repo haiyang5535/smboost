@@ -21,9 +21,13 @@ _LOCAL_BIND_TOOLS_ERROR = (
 
 
 class _LocalLlamaChat:
-    def __init__(self, client, *, max_tokens: int = 8192):
+    def __init__(self, client, *, max_tokens: int = 8192, temperature: float = 0.0):
         self._client = client
         self._max_tokens = max_tokens
+        # Stored so tests and benchmark callers can inspect/override the
+        # sampling temperature. Default 0.0 matches the deterministic-default
+        # contract of ``get_default_llm_factory``.
+        self.temperature = temperature
 
     def invoke(
         self,
@@ -34,13 +38,13 @@ class _LocalLlamaChat:
         # Silently ignore unknown LangChain kwargs (e.g. `config=`, `temperature=`,
         # anything passed by the `.bind()` machinery) so this class stays
         # drop-in compatible with callers that treat it like a LangChain
-        # `BaseChatModel`. Stop + max_tokens are the only knobs we actually
-        # honor locally.
+        # `BaseChatModel`. Stop + max_tokens + temperature are the only knobs
+        # we actually honor locally.
         payload = [_to_chat_message(msg) for msg in messages]
         resp = self._client.create_chat_completion(
             messages=payload,
             max_tokens=self._max_tokens,
-            temperature=0.0,
+            temperature=self.temperature,
             stop=stop or [],
         )
         content = resp["choices"][0]["message"]["content"]
@@ -69,6 +73,7 @@ class LlamaCppLocalFactory:
         max_tokens: int = 8192,
         chat_format: str = "qwen",
         verbose: bool = False,
+        temperature: float = 0.0,
     ):
         self._model_dir = Path(model_dir)
         self._n_ctx = n_ctx
@@ -77,6 +82,7 @@ class LlamaCppLocalFactory:
         self._max_tokens = max_tokens
         self._chat_format = chat_format
         self._verbose = verbose
+        self._temperature = temperature
         self._cache: dict[str, _LocalLlamaChat] = {}
 
     def __call__(self, model: str):
@@ -84,6 +90,7 @@ class LlamaCppLocalFactory:
             self._cache[model] = _LocalLlamaChat(
                 self._build_client(model),
                 max_tokens=self._max_tokens,
+                temperature=self._temperature,
             )
         return self._cache[model]
 

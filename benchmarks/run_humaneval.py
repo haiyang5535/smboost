@@ -28,9 +28,19 @@ def clean_completion(raw: str) -> str:
     return cleaned
 
 
-def run_baseline(tasks: list[dict], model: str) -> list[dict]:
-    """Run each task through raw ChatOpenAI (no harness). Returns list of result dicts."""
-    llm = ChatOpenAI(model=model, base_url="http://localhost:8000/v1", api_key="sk-no-key")
+def run_baseline(tasks: list[dict], model: str, temperature: float = 0.0) -> list[dict]:
+    """Run each task through raw ChatOpenAI (no harness). Returns list of result dicts.
+
+    ``temperature`` defaults to ``0.0`` for deterministic benchmark evaluation; without
+    pinning, sampling noise alone could flip 1-3 tasks on an n=20 gate, masking any
+    harness lift signal.
+    """
+    llm = ChatOpenAI(
+        model=model,
+        base_url="http://localhost:8000/v1",
+        api_key="sk-no-key",
+        temperature=temperature,
+    )
     results = []
     for task in tasks:
         start = time.monotonic()

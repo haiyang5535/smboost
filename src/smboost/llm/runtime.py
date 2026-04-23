@@ -24,15 +24,17 @@ def _env_int(name: str, default: int) -> int:
 
 
 class _BenchmarkLlamaCppLocalFactory(LlamaCppLocalFactory):
-    def __init__(self, *args, max_tokens: int, **kwargs):
+    def __init__(self, *args, max_tokens: int, temperature: float = 0.0, **kwargs):
         super().__init__(*args, **kwargs)
         self._max_tokens = max_tokens
+        self._temperature = temperature
 
     def __call__(self, model: str):
         if model not in self._cache:
             self._cache[model] = _LocalLlamaChat(
                 self._build_client(model),
                 max_tokens=self._max_tokens,
+                temperature=self._temperature,
             )
         return self._cache[model]
 
@@ -69,6 +71,7 @@ def _cached_local_factory(
     offload_kqv: bool,
     max_tokens: int,
     verbose: bool,
+    temperature: float,
 ) -> Callable[[str], object]:
     return _BenchmarkLlamaCppLocalFactory(
         model_dir=model_dir,
@@ -77,6 +80,7 @@ def _cached_local_factory(
         offload_kqv=offload_kqv,
         verbose=verbose,
         max_tokens=max_tokens,
+        temperature=temperature,
     )
 
 
@@ -85,6 +89,7 @@ def _cached_openai_factory(
     base_url: str,
     api_key: str,
     max_tokens: int,
+    temperature: float,
 ) -> Callable[[str], object]:
     def _factory(model: str):
         return _CompatibleChatOpenAI(
@@ -92,12 +97,21 @@ def _cached_openai_factory(
             base_url=base_url,
             api_key=api_key,
             max_tokens=max_tokens,
+            temperature=temperature,
         )
 
     return _factory
 
 
-def get_default_llm_factory() -> Callable[[str], object]:
+def get_default_llm_factory(temperature: float = 0.0) -> Callable[[str], object]:
+    """Return an LLM factory honoring env-var backend selection.
+
+    ``temperature`` defaults to ``0.0`` so that benchmark evaluation is
+    deterministic; callers that want stochasticity can override. Pinning
+    temperature here also fixes a noise source in gate runs — two harness
+    invocations of the same condition would otherwise flip 1-3 tasks from
+    sampling jitter on n=20.
+    """
     backend = os.environ.get("SMBOOST_LLM_BACKEND", "server").lower()
 
     if backend == "local":
@@ -108,6 +122,7 @@ def get_default_llm_factory() -> Callable[[str], object]:
             _env_bool("SMBOOST_LOCAL_OFFLOAD_KQV", True),
             _env_int("SMBOOST_LOCAL_MAX_TOKENS", 8192),
             _env_bool("SMBOOST_LOCAL_VERBOSE", False),
+            temperature,
         )
 
     if backend in {"server", "provider"}:
@@ -115,6 +130,7 @@ def get_default_llm_factory() -> Callable[[str], object]:
             os.environ.get("SMBOOST_OPENAI_BASE_URL", "http://localhost:8000/v1"),
             os.environ.get("SMBOOST_OPENAI_API_KEY", "sk-no-key"),
             _env_int("SMBOOST_OPENAI_MAX_TOKENS", 8192),
+            temperature,
         )
 
     raise ValueError(f"Unsupported SMBOOST_LLM_BACKEND: {backend}")

@@ -55,7 +55,17 @@ def _run_humaneval_raw(tasks: list[dict], model: str) -> list[dict]:
 def _run_humaneval_harness(
     tasks: list[dict], condition: str, model: str
 ) -> list[dict]:
-    """Run through a C1-C6 harness condition. Returns row dicts (HE+ scored)."""
+    """Run through a C1-C6 harness condition. Returns row dicts (HE+ scored).
+
+    The task_metadata dict plumbed into ``agent.run(...)`` uses
+    ``testtype="humaneval"`` which routes through
+    ``src/smboost/tasks/completion.py::_verify_grounded``'s HumanEval branch:
+    it re-runs ``prompt + completion + test + check(entry_point)`` in a
+    subprocess so the verify step matches the final ground-truth pass.
+    Without this, ``task_metadata`` was empty and verify degraded to
+    ``_verify_ast_only`` (always passes on a first-shot generation), making
+    the whole harness inert on HumanEval gate data.
+    """
     from benchmarks.conditions import build_condition
     from benchmarks.humaneval_plus.simple_eval import evaluate_base_subset as evaluate_dual
     from benchmarks.run_humaneval import clean_completion
@@ -65,7 +75,19 @@ def _run_humaneval_harness(
         agent = build_condition(
             condition=condition, model=model, task_graph_kind="completion"
         )
-        run = agent.run(t["prompt"])
+        task_metadata = {
+            "testtype": "humaneval",
+            "task_id": t["task_id"],
+            "entry_point": t.get("entry_point", ""),
+            "prompt": t["prompt"],
+            "test": t.get("test", ""),
+        }
+        run = agent.run(
+            t["prompt"],
+            task_metadata=task_metadata,
+            task_id=t["task_id"],
+            condition=condition,
+        )
         generate_output = ""
         for step in run.trace:
             if step.node == "generate":

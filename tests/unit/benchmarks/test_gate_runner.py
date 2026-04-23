@@ -147,6 +147,185 @@ def test_run_humaneval_harness_real_construction_two_tasks():
         assert r["model"] == "qwen3.5:2b"
 
 
+def test_default_llm_factory_uses_temperature_zero(monkeypatch):
+    """Determinism: the default benchmark factory must pin temperature=0 on the OpenAI-
+    compatible backend so repeated C1/C4/etc. runs don't flip 1-3 tasks from sampling
+    jitter on n=20 gates."""
+    # Clear the lru_cache so a fresh factory gets constructed with our patched backend.
+    from smboost.llm import runtime as runtime_mod
+
+    runtime_mod._cached_openai_factory.cache_clear()
+    runtime_mod._cached_local_factory.cache_clear()
+
+    monkeypatch.setenv("SMBOOST_LLM_BACKEND", "server")
+    monkeypatch.setenv("SMBOOST_OPENAI_BASE_URL", "http://localhost:8000/v1")
+    monkeypatch.setenv("SMBOOST_OPENAI_API_KEY", "sk-no-key")
+    monkeypatch.setenv("SMBOOST_OPENAI_MAX_TOKENS", "512")
+
+    factory = runtime_mod.get_default_llm_factory()
+    llm = factory("qwen3.5:2b")
+    # _CompatibleChatOpenAI subclasses ChatOpenAI which exposes `temperature`
+    # as a pydantic field.
+    assert llm.temperature == 0.0
+
+
+def test_default_llm_factory_local_backend_pins_temperature_zero(monkeypatch):
+    """Mirror of the OpenAI-backend test for the local llama.cpp backend — the
+    _LocalLlamaChat the factory vends should carry temperature=0 so
+    create_chat_completion runs deterministically."""
+    import sys
+    from types import SimpleNamespace
+
+    from smboost.llm import runtime as runtime_mod
+
+    runtime_mod._cached_openai_factory.cache_clear()
+    runtime_mod._cached_local_factory.cache_clear()
+
+    class FakeLlama:
+        def __init__(self, model_path: str, **_kwargs):
+            pass
+
+    monkeypatch.setitem(sys.modules, "llama_cpp", SimpleNamespace(Llama=FakeLlama))
+    monkeypatch.setenv("SMBOOST_LLM_BACKEND", "local")
+    monkeypatch.setenv("SMBOOST_MODEL_DIR", "models")
+    monkeypatch.setenv("SMBOOST_LOCAL_MAX_TOKENS", "64")
+
+    factory = runtime_mod.get_default_llm_factory()
+    llm = factory("qwen3.5:2b")
+    assert llm.temperature == 0.0
+
+
+def test_run_baseline_uses_temperature_zero():
+    """run_baseline must construct ChatOpenAI with temperature=0 so the raw baseline
+    doesn't drift across re-runs on n=20 gates."""
+    import benchmarks.run_humaneval as rh
+
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, *, model, base_url, api_key, temperature, **_kwargs):
+            captured["model"] = model
+            captured["base_url"] = base_url
+            captured["api_key"] = api_key
+            captured["temperature"] = temperature
+
+        def invoke(self, _messages):
+            return AIMessage(content="    return 1\n")
+
+    with patch.object(rh, "ChatOpenAI", FakeChatOpenAI):
+        rh.run_baseline(
+            [{"task_id": "HumanEval/0", "prompt": "def f():\n    "}],
+            model="qwen3.5:2b",
+        )
+
+    assert captured["temperature"] == 0.0
+    assert captured["model"] == "qwen3.5:2b"
+
+
+def test_run_humaneval_harness_passes_task_metadata_to_agent():
+    """Regression: _run_humaneval_harness previously called agent.run(prompt) with no
+    task_metadata, causing _verify_grounded to degrade to AST-only verify and the whole
+    harness (grounded_verify/session_memory/shrinkage/scorer) to go inert on gate data.
+    See docs/superpowers/research/2026-04-23-c1-lift-debug.md.
+    """
+    from benchmarks.gates.runner import _run_humaneval_harness
+
+    fake_agent = MagicMock()
+    fake_run = MagicMock()
+    fake_run.trace = []
+    fake_run.stats = MagicMock(total_latency_s=1.0, retry_count=0)
+    fake_agent.run.return_value = fake_run
+
+    tasks = [
+        {
+            "task_id": "HumanEval/0",
+            "prompt": "def foo(x):\n    ",
+            "entry_point": "foo",
+            "test": "def check(candidate):\n    assert candidate(1) == 1\n",
+        }
+    ]
+
+    fake_eval = MagicMock()
+    fake_eval.rows = [
+        {
+            "task_id": "HumanEval/0",
+            "completion": "",
+            "passed_heval": 1,
+            "passed_heval_plus": 1,
+        }
+    ]
+
+    # build_condition is imported inside the function, so patch at its origin.
+    with patch(
+        "benchmarks.conditions.build_condition", return_value=fake_agent
+    ), patch(
+        "benchmarks.humaneval_plus.simple_eval.evaluate_base_subset",
+        return_value=fake_eval,
+    ):
+        _run_humaneval_harness(tasks, condition="C1", model="qwen3.5:2b")
+
+    assert fake_agent.run.called, "agent.run was not invoked"
+    call = fake_agent.run.call_args
+    kwargs = call.kwargs
+    # prompt passed positionally
+    assert call.args[0] == "def foo(x):\n    "
+    # task_metadata, task_id, condition kwargs plumbed through
+    assert "task_metadata" in kwargs
+    md = kwargs["task_metadata"]
+    assert md["testtype"] == "humaneval"
+    assert md["entry_point"] == "foo"
+    assert md["test"] == "def check(candidate):\n    assert candidate(1) == 1\n"
+    assert md["prompt"] == "def foo(x):\n    "
+    assert md["task_id"] == "HumanEval/0"
+    assert kwargs.get("task_id") == "HumanEval/0"
+    assert kwargs.get("condition") == "C1"
+
+
+def test_run_humaneval_harness_passes_task_id_and_condition():
+    """agent.run must receive task_id + condition so trace records are tagged correctly."""
+    from benchmarks.gates.runner import _run_humaneval_harness
+
+    fake_agent = MagicMock()
+    fake_run = MagicMock()
+    fake_run.trace = []
+    fake_run.stats = MagicMock(total_latency_s=0.5, retry_count=2)
+    fake_agent.run.return_value = fake_run
+
+    tasks = [
+        {
+            "task_id": "HumanEval/42",
+            "prompt": "def bar():\n    ",
+            "entry_point": "bar",
+            "test": "def check(c):\n    pass\n",
+        }
+    ]
+
+    fake_eval = MagicMock()
+    fake_eval.rows = [
+        {
+            "task_id": "HumanEval/42",
+            "completion": "",
+            "passed_heval": 0,
+            "passed_heval_plus": 0,
+        }
+    ]
+
+    with patch(
+        "benchmarks.conditions.build_condition", return_value=fake_agent
+    ), patch(
+        "benchmarks.humaneval_plus.simple_eval.evaluate_base_subset",
+        return_value=fake_eval,
+    ):
+        rows = _run_humaneval_harness(tasks, condition="C3", model="qwen3.5:2b")
+
+    kwargs = fake_agent.run.call_args.kwargs
+    assert kwargs.get("task_id") == "HumanEval/42"
+    assert kwargs.get("condition") == "C3"
+    # Retries and latency from the fake run propagate into the row for scoring.
+    assert rows[0]["retries"] == 2
+    assert rows[0]["latency_s"] == 0.5
+
+
 def test_run_gate_dispatches_bfcl():
     cfg = GateConfig(
         name="G3_test",
