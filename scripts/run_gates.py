@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -26,6 +27,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# evalplus downloads HumanEvalPlus.jsonl.gz via urllib on first run. The Python.org
+# macOS installer ships no OS-level cert bundle, so we point SSL at certifi's.
+if "SSL_CERT_FILE" not in os.environ:
+    try:
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        pass
 
 from benchmarks.gates.runner import run_gate, GateConfig
 from benchmarks.gates.criteria import (
