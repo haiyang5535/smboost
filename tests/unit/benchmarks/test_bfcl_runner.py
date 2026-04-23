@@ -88,3 +88,30 @@ def test_run_bfcl_harness_uses_tool_calling_graph():
     assert r["mode"] == "C1"
     assert r["passed"] == 1
     assert r["retries"] == 0
+
+
+def test_run_bfcl_harness_real_construction_with_dict_schemas():
+    """Integration-style probe: really construct the graph BFCL would use.
+
+    BFCL ships function schemas as bare dicts (``{"name": ..., "parameters":
+    ...}``), not ``StructuredTool`` instances. Previously
+    ``ToolCallingTaskGraph.__init__`` did ``{t.name: t for t in tools}`` and
+    crashed on dicts (Finding F2).
+
+    With the F2 fix, ``run_bfcl_harness`` now routes through
+    ``EmitOnlyToolCallingTaskGraph``, which accepts bare dict schemas and
+    emits — rather than executes — the tool call. This test verifies the
+    real construction path no longer crashes.
+    """
+    from benchmarks.conditions import build_condition
+
+    agent = build_condition(
+        condition="C1",
+        model="qwen3.5:2b",
+        task_graph_kind="emit_only_tool_calling",
+        tools=_SAMPLE_TASK["functions"],  # list[dict], not list[StructuredTool]
+    )
+    # Construction alone is the regression check; we shouldn't reach an LLM.
+    assert agent is not None
+    from smboost.tasks.emit_only_tool_calling import EmitOnlyToolCallingTaskGraph
+    assert isinstance(agent._harness._task_graph, EmitOnlyToolCallingTaskGraph)

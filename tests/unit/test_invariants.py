@@ -61,6 +61,15 @@ def test_tool_calling_suite_has_expected_nodes():
     assert "dispatch" in suite.node_invariants
     assert "verify" in suite.node_invariants
 
+def test_emit_only_tool_calling_suite_has_expected_nodes():
+    suite = InvariantSuite.emit_only_tool_calling()
+    assert "plan" in suite.node_invariants
+    assert "generate" in suite.node_invariants
+    assert "verify" in suite.node_invariants
+    # verify must require PASS prefix
+    _, verify_exits = suite.node_invariants["verify"]
+    assert verify_says_pass in verify_exits
+
 def test_invariant_fn_type_alias_is_importable():
     from smboost.invariants.suite import InvariantFn
     assert InvariantFn is not None
