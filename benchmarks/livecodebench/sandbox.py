@@ -8,15 +8,42 @@ import time
 import tempfile
 import os
 
+# Security: pickle.loads on untrusted data is a remote-code-execution vector.
+# The LiveCodeBench-Hard dataset (downloaded from Hugging Face per
+# CONTRIBUTING.md) historically encodes some test cases as pickled blobs. By
+# default we refuse to deserialize them and only accept native JSON entries.
+# Operators who trust the dataset source can opt back in with
+# SMBOOST_ALLOW_PICKLE_TEST_CASES=1. See SECURITY.md for the trust boundary.
+_PICKLE_OPT_IN_ENV = "SMBOOST_ALLOW_PICKLE_TEST_CASES"
+_pickle_skip_warned = False
+
+
+def _pickle_allowed() -> bool:
+    return os.environ.get(_PICKLE_OPT_IN_ENV, "").strip() not in ("", "0", "false", "False")
+
+
 def decode_test_cases(test_code_str: str) -> list[dict]:
+    global _pickle_skip_warned
     try:
         cases = json.loads(test_code_str)
     except json.JSONDecodeError:
         return []
-        
+
     decoded = []
     for c in cases:
         if isinstance(c, str):
+            # Pickled payload — only decode when the operator has explicitly
+            # opted in by setting SMBOOST_ALLOW_PICKLE_TEST_CASES=1.
+            if not _pickle_allowed():
+                if not _pickle_skip_warned:
+                    print(
+                        f"[smboost.sandbox] WARNING: skipping pickled LiveCodeBench test case; "
+                        f"set {_PICKLE_OPT_IN_ENV}=1 to enable pickle decoding "
+                        f"(see SECURITY.md for the trust boundary).",
+                        file=sys.stderr,
+                    )
+                    _pickle_skip_warned = True
+                continue
             try:
                 c_dec = pickle.loads(zlib.decompress(base64.b64decode(c)))
                 if isinstance(c_dec, list):

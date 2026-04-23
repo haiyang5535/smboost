@@ -3,16 +3,72 @@ import json
 import base64
 import zlib
 import pickle
+from benchmarks.livecodebench import sandbox
 from benchmarks.livecodebench.sandbox import run, decode_test_cases
 
-def test_decode_test_cases():
+
+@pytest.fixture(autouse=True)
+def _reset_pickle_skip_warned():
+    """Reset the module-level one-shot warning flag between tests."""
+    sandbox._pickle_skip_warned = False
+    yield
+    sandbox._pickle_skip_warned = False
+
+
+def test_decode_test_cases(monkeypatch):
+    # Pickled payloads are only decoded when the opt-in env var is set (F6).
+    monkeypatch.setenv("SMBOOST_ALLOW_PICKLE_TEST_CASES", "1")
     cases = [{"input": "1", "output": "2", "testtype": "stdin"}]
     encoded = base64.b64encode(zlib.compress(pickle.dumps(cases))).decode('utf-8')
     test_code_str = json.dumps([encoded])
-    
+
     decoded = decode_test_cases(test_code_str)
     assert len(decoded) == 1
     assert decoded[0]["input"] == "1"
+
+
+def test_decode_test_cases_skips_pickle_without_env_var(monkeypatch, capsys):
+    """By default (F6), pickled LCB entries are skipped and a warning is printed once."""
+    monkeypatch.delenv("SMBOOST_ALLOW_PICKLE_TEST_CASES", raising=False)
+    cases = [{"input": "1", "output": "2", "testtype": "stdin"}]
+    encoded = base64.b64encode(zlib.compress(pickle.dumps(cases))).decode("utf-8")
+    # One JSON-native case alongside the pickled one so we can verify we keep
+    # the safe entries and drop only the pickled payload.
+    native_case = {"input": "9", "output": "10", "testtype": "stdin"}
+    test_code_str = json.dumps([encoded, native_case])
+
+    decoded = decode_test_cases(test_code_str)
+
+    # Only the native JSON case survives; the pickled one is silently dropped
+    # (non-crashing) and a one-shot warning is printed to stderr.
+    assert decoded == [native_case]
+    captured = capsys.readouterr()
+    assert "SMBOOST_ALLOW_PICKLE_TEST_CASES" in captured.err
+    assert "skipping pickled" in captured.err
+
+
+def test_decode_test_cases_allows_pickle_with_env_var(monkeypatch):
+    """With SMBOOST_ALLOW_PICKLE_TEST_CASES=1, pickled entries are decoded (F6)."""
+    monkeypatch.setenv("SMBOOST_ALLOW_PICKLE_TEST_CASES", "1")
+    cases = [{"input": "7", "output": "8", "testtype": "stdin"}]
+    encoded = base64.b64encode(zlib.compress(pickle.dumps(cases))).decode("utf-8")
+    test_code_str = json.dumps([encoded])
+
+    decoded = decode_test_cases(test_code_str)
+    assert len(decoded) == 1
+    assert decoded[0]["input"] == "7"
+
+
+@pytest.mark.parametrize("value", ["0", "false", "False", ""])
+def test_decode_test_cases_falsy_env_values_still_skip(monkeypatch, value):
+    """Common falsy env values don't count as opt-in (F6)."""
+    monkeypatch.setenv("SMBOOST_ALLOW_PICKLE_TEST_CASES", value)
+    cases = [{"input": "1", "output": "2", "testtype": "stdin"}]
+    encoded = base64.b64encode(zlib.compress(pickle.dumps(cases))).decode("utf-8")
+    test_code_str = json.dumps([encoded])
+
+    decoded = decode_test_cases(test_code_str)
+    assert decoded == []
 
 def test_sandbox_stdin_pass():
     solution = "import sys\nprint(int(sys.stdin.read().strip()) + 1)"

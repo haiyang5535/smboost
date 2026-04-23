@@ -1,9 +1,10 @@
 # Ignore all markdown files
 *.md
 
-# Except README.md and CONTRIBUTING.md
+# Except README.md, CONTRIBUTING.md, SECURITY.md
 !README.md
 !CONTRIBUTING.md
+!SECURITY.md
 
 # Worktrees
 .worktrees/
