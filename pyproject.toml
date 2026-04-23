@@ -3,10 +3,19 @@ name = "smboost"
 version = "0.1.0"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
+# Upper bounds: LangChain 1.x minors have been breaking (e.g. chat-model param
+# renames).  We also subclass private LangChain API in src/smboost/llm/runtime.py
+# (_CompatibleChatOpenAI overrides _default_params / _get_request_payload), so a
+# langchain-openai 2.0 bump would almost certainly break us.  Re-pin only after
+# smoke-testing against the new minor.
 dependencies = [
-    "langgraph>=1.0",
-    "langchain-ollama>=1.0",
-    "langchain-core>=1.0",
+    "langgraph>=1.0,<2.0",
+    "langchain-core>=1.0,<2.0",
+    # pinned <2.0 because llm/runtime.py patches private LangChain API
+    "langchain-openai>=1.0,<2.0",
+    # evalplus uses urllib to download HumanEvalPlus.jsonl.gz; py3.13 mac has
+    # no default cert bundle, so scripts/run_gates.py sets SSL_CERT_FILE via certifi.
+    "certifi>=2024.0",
 ]
 
 [project.optional-dependencies]
@@ -14,12 +23,18 @@ dev = [
     "pytest>=8.0",
     "pytest-mock>=3.14",
 ]
+# Local llama.cpp backend (SMBOOST_LLM_BACKEND=local).  Optional because the
+# default backend hits an OpenAI-compatible server and most reviewers will use
+# that path.
+local = [
+    "llama-cpp-python>=0.3",
+]
 benchmark = [
     "human-eval>=1.0",
 ]
 bench = [
-    "evalplus>=0.3.0",
-    "requests>=2.31.0",
+    "evalplus>=0.3.0,<1.0",
+    "requests>=2.31.0,<3.0",
     "human-eval>=1.0.3",
 ]
 

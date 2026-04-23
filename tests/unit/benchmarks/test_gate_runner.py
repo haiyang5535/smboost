@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from unittest.mock import patch, MagicMock
 
+from langchain_core.messages import AIMessage
+
 from benchmarks.gates.runner import run_gate, GateConfig
+from benchmarks.humaneval_plus.runner import HumanEvalPlusResult
 
 
 def _fake_humaneval_tasks(n):
@@ -60,6 +63,81 @@ def test_run_gate_dispatches_humaneval_raw_and_harness_correctly():
     assert len(rows) == 60  # 20 tasks x 3 configs
     modes = {r["mode"] for r in rows}
     assert modes == {"raw", "C1", "C4"}
+
+
+def test_run_humaneval_harness_real_construction_two_tasks():
+    """Smoke test that really builds HarnessAgent + CompletionTaskGraph for
+    the humaneval_plus/C4 path, using a canned llm_factory.
+
+    This is the mirror-image of the mocked dispatch test above: here
+    `build_condition` is NOT patched, so any construction-time regression
+    (invariant-suite wiring, task-graph wiring, llm-factory contract) will
+    surface.  C4 is used because it runs the AST-only verify, which is
+    deterministic and needs no subprocess sandbox.
+
+    The only boundary that stays mocked is :func:`_evalplus_evaluate` — we
+    don't want to invoke the real evalplus pipeline in a unit test.
+    """
+    canned_completion = "    return a + b\n"
+
+    def _fake_llm_factory(_model):
+        llm = MagicMock()
+        llm.invoke.return_value = AIMessage(content=canned_completion)
+        return llm
+
+    tasks = [
+        {
+            "task_id": "HEval/add",
+            "prompt": (
+                "def add(a: int, b: int) -> int:\n"
+                '    """Return a + b."""\n'
+            ),
+            "entry_point": "add",
+        },
+        {
+            "task_id": "HEval/add2",
+            "prompt": (
+                "def add2(a: int, b: int) -> int:\n"
+                '    """Return a + b."""\n'
+            ),
+            "entry_point": "add2",
+        },
+    ]
+
+    # Pretend evalplus scored both tasks as passing.  Real contract shape:
+    # { task_id: {"base": {"passed": bool}, "plus": {"passed": bool}} }
+    fake_eval_map = {
+        "HEval/add":  {"base": {"passed": True},  "plus": {"passed": True}},
+        "HEval/add2": {"base": {"passed": False}, "plus": {"passed": False}},
+    }
+
+    cfg = GateConfig(
+        name="G_real_smoke",
+        bench="humaneval_plus",
+        n=2,
+        configs=[("qwen3.5:2b", "C4")],
+    )
+
+    with patch(
+        "benchmarks.gates.runner._load_tasks_for_bench", return_value=tasks
+    ), patch(
+        "benchmarks.conditions.get_benchmark_llm_factory",
+        return_value=_fake_llm_factory,
+    ), patch(
+        "benchmarks.humaneval_plus.runner._evalplus_evaluate",
+        return_value=fake_eval_map,
+    ):
+        rows = run_gate(cfg)
+
+    assert len(rows) == 2
+    # Both tasks ran through real HarnessAgent + CompletionTaskGraph + evaluate_dual.
+    by_id = {r["task_id"]: r for r in rows}
+    assert by_id["HEval/add"]["passed"] == 1
+    assert by_id["HEval/add2"]["passed"] == 0
+    for r in rows:
+        assert r["mode"] == "C4"
+        assert r["bench"] == "humaneval_plus"
+        assert r["model"] == "qwen3.5:2b"
 
 
 def test_run_gate_dispatches_bfcl():
