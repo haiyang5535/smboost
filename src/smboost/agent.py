@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from smboost.harness.graph import HarnessGraph
 from smboost.harness.result import HarnessResult, RunStats
 from smboost.harness.state import HarnessState, StepOutput
+from smboost.llm.runtime import get_default_llm_factory
 from smboost.memory.session import SessionMemory
 from smboost.scorer import RobustnessScorer
 from smboost.tasks.coding import CodingTaskGraph
@@ -56,13 +57,17 @@ class HarnessAgent:
         self.scorer_enabled = scorer_enabled
         self.trace_log_path = Path(trace_log_path) if trace_log_path is not None else None
         self._memory = SessionMemory() if session_memory else None
+        # When no explicit factory is provided, fall back to the env-var-aware
+        # default. This respects SMBOOST_OPENAI_BASE_URL / _API_KEY / _MAX_TOKENS
+        # (and SMBOOST_LLM_BACKEND=local) instead of hard-coding localhost:8000.
+        effective_factory = llm_factory if llm_factory is not None else get_default_llm_factory()
         self._harness = HarnessGraph(
             task_graph=task_graph or CodingTaskGraph(),
             invariant_suite=invariants,
             max_retries=max_retries,
             scorer=RobustnessScorer(threshold=scorer_threshold) if scorer_enabled else None,
             shrinkage_enabled=shrinkage_enabled,
-            llm_factory=llm_factory,
+            llm_factory=effective_factory,
         )
 
     def run(

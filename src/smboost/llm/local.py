@@ -14,12 +14,28 @@ _MODEL_MAP = {
 }
 
 
+_LOCAL_BIND_TOOLS_ERROR = (
+    "SMBOOST_LLM_BACKEND=local does not support tool-calling; "
+    "use SMBOOST_LLM_BACKEND=server"
+)
+
+
 class _LocalLlamaChat:
     def __init__(self, client, *, max_tokens: int = 8192):
         self._client = client
         self._max_tokens = max_tokens
 
-    def invoke(self, messages: list[BaseMessage], stop: list[str] | None = None):
+    def invoke(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        **_kwargs,
+    ):
+        # Silently ignore unknown LangChain kwargs (e.g. `config=`, `temperature=`,
+        # anything passed by the `.bind()` machinery) so this class stays
+        # drop-in compatible with callers that treat it like a LangChain
+        # `BaseChatModel`. Stop + max_tokens are the only knobs we actually
+        # honor locally.
         payload = [_to_chat_message(msg) for msg in messages]
         resp = self._client.create_chat_completion(
             messages=payload,
@@ -29,6 +45,15 @@ class _LocalLlamaChat:
         )
         content = resp["choices"][0]["message"]["content"]
         return AIMessage(content=content or "")
+
+    def bind_tools(self, *_args, **_kwargs):
+        """Tool binding is not supported on the in-process llama.cpp backend.
+
+        Caller graphs (`CodingTaskGraph`, `ToolCallingTaskGraph`) use
+        `llm.bind_tools(...)`, which assumes a LangChain `BaseChatModel`.
+        Fail fast with a clear message instead of a late `TypeError`.
+        """
+        raise RuntimeError(_LOCAL_BIND_TOOLS_ERROR)
 
 
 class LlamaCppLocalFactory:

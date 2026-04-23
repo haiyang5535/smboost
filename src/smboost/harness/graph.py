@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing import Callable
 from typing import TYPE_CHECKING
 
-from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
@@ -24,22 +23,18 @@ class HarnessGraph:
         shrinkage_enabled: bool = True,
         llm_factory: Callable[[str], object] | None = None,
     ):
+        if llm_factory is None:
+            raise ValueError(
+                "HarnessGraph requires an llm_factory. Construct via HarnessAgent "
+                "or pass smboost.llm.runtime.get_default_llm_factory() explicitly."
+            )
         self._task_graph = task_graph
         self._suite = invariant_suite
         self._max_retries = max_retries
         self._scorer = scorer  # None means no self-consistency scoring
         self._shrinkage_enabled = shrinkage_enabled
-        self._llm_factory = llm_factory or self._default_llm_factory
+        self._llm_factory = llm_factory
         self._compiled = self._build()
-
-    @staticmethod
-    def _default_llm_factory(model: str):
-        return ChatOpenAI(
-            base_url="http://localhost:8000/v1",
-            api_key="sk-no-key",
-            model=model,
-            max_tokens=4096,
-        )
 
     def _build(self):
         g = StateGraph(HarnessState)

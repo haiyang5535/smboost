@@ -77,6 +77,46 @@ def test_local_llama_factory_honors_max_tokens(monkeypatch):
     assert created["max_tokens"] == 1234
 
 
+def test_local_llama_invoke_ignores_extra_langchain_kwargs(monkeypatch):
+    """F14: callers may pass LangChain kwargs like `config=` or `temperature=`
+    (including via the `.bind()` machinery). Silently ignore rather than
+    raising `TypeError`."""
+    from smboost.llm.local import _LocalLlamaChat
+
+    class FakeClient:
+        def create_chat_completion(self, *, messages, max_tokens, temperature, stop):
+            return {"choices": [{"message": {"content": "hi"}}]}
+
+    chat = _LocalLlamaChat(FakeClient(), max_tokens=64)
+    resp = chat.invoke(
+        [HumanMessage(content="hello")],
+        stop=None,
+        config={"callbacks": []},
+        temperature=0.7,
+    )
+    assert resp.content == "hi"
+
+
+def test_local_llama_bind_tools_raises_helpful_error():
+    """F14: `llm.bind_tools(...)` is used by CodingTaskGraph /
+    ToolCallingTaskGraph. `_LocalLlamaChat` isn't a real LangChain
+    `BaseChatModel`, so fail fast with a clear message instead of a late
+    `TypeError` or `AttributeError`."""
+    import pytest
+
+    from smboost.llm.local import _LocalLlamaChat
+
+    chat = _LocalLlamaChat(client=object(), max_tokens=64)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        chat.bind_tools([])
+
+    msg = str(exc_info.value)
+    assert "SMBOOST_LLM_BACKEND=local" in msg
+    assert "tool-calling" in msg
+    assert "SMBOOST_LLM_BACKEND=server" in msg
+
+
 def test_matrix_forces_serial_execution_for_local_backend(monkeypatch):
     monkeypatch.setenv("SMBOOST_LLM_BACKEND", "local")
 

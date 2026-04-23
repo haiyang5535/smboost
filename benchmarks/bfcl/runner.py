@@ -53,14 +53,15 @@ def _parse_raw_call(raw: str) -> dict[str, Any] | None:
 
 
 def _make_raw_llm(model: str):
-    """Indirection for tests to patch."""
-    from langchain_openai import ChatOpenAI
+    """Indirection for tests to patch.
 
-    return ChatOpenAI(
-        model=model,
-        base_url="http://localhost:8000/v1",
-        api_key="sk-no-key",
-    )
+    Uses the same env-var-aware factory as the harness path
+    (SMBOOST_OPENAI_BASE_URL / _API_KEY / SMBOOST_LLM_BACKEND), so a BFCL raw
+    run on a non-default port doesn't silently hit `localhost:8000`.
+    """
+    from smboost.llm.runtime import get_default_llm_factory
+
+    return get_default_llm_factory()(model)
 
 
 def _format_raw_prompt(task: dict[str, Any]) -> str:
