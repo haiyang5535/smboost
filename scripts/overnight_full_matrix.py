@@ -24,6 +24,17 @@ from benchmarks.livecodebench.matrix import run_matrix, FINAL_DIR, SHARD_DIR
 
 CANARY_PID = 0  # 0 = no wait
 
+# Security (F15): previously this script unconditionally SIGKILL'd any process
+# bound to port 8000 and any "llama_cpp.server"/"llama-server" process on the
+# box. That's dangerous on shared dev machines (FastAPI defaults to 8000,
+# other llama servers, other operators' work). The kill/start-server flow is
+# now gated behind an explicit env var.
+_MANAGE_SERVER_ENV = "SMBOOST_OVERNIGHT_MANAGE_SERVER"
+
+
+def _manage_server_enabled() -> bool:
+    return os.environ.get(_MANAGE_SERVER_ENV, "").strip() not in ("", "0", "false", "False")
+
 MODELS = [
     ("0.8b", "qwen3.5:0.8b", _ROOT / "models/Qwen3.5-0.8B-Q4_K_M.gguf"),
     ("2b",   "qwen3.5:2b",   _ROOT / "models/Qwen3.5-2B-Q4_K_M.gguf"),
@@ -70,6 +81,11 @@ def _wait_for_canary(pid: int) -> None:
 
 
 def _kill_server() -> None:
+    if not _manage_server_enabled():
+        _log(
+            f"refusing to kill processes on port 8000 without {_MANAGE_SERVER_ENV}=1"
+        )
+        return
     subprocess.run(["pkill", "-9", "-f", "llama_cpp.server"], check=False)
     subprocess.run(["pkill", "-9", "-f", "llama-server"], check=False)
     for _ in range(15):
@@ -241,6 +257,21 @@ def main() -> None:
     _log(f"Conditions: {CONDITIONS}")
     _log(f"Seeds: {SEEDS}  Tasks/cell: {N_TASKS}")
     _log("=" * 60)
+
+    # Security (F15): refuse to run the kill-and-relaunch server lifecycle
+    # without explicit operator consent. The script swaps models by SIGKILLing
+    # anything on port 8000, which is dangerous on shared dev machines.
+    if not _manage_server_enabled():
+        _log(
+            f"ERROR: this script manages the llama.cpp server lifecycle "
+            f"(pkill llama_cpp.server, kill $(lsof -ti :8000), relaunch per model). "
+            f"Refusing to run without {_MANAGE_SERVER_ENV}=1."
+        )
+        _log(
+            "To run it: start the server yourself for each model, or re-run with "
+            f"{_MANAGE_SERVER_ENV}=1 to let this script manage it."
+        )
+        sys.exit(2)
 
     if CANARY_PID:
         _wait_for_canary(CANARY_PID)

@@ -66,6 +66,11 @@ pip install -U "huggingface_hub[cli]"
 hf download hai5535/smboost-lcb-hard livecodebench_hard_v1.jsonl --local-dir benchmarks/data/ --repo-type dataset
 ```
 
+> Security note: some LCB test cases are pickled blobs. The sandbox skips
+> them by default. If you trust the dataset source and want full coverage,
+> set `SMBOOST_ALLOW_PICKLE_TEST_CASES=1`. See `SECURITY.md` for the trust
+> boundary.
+
 ---
 
 ## 4. Running Benchmarks and Tests
