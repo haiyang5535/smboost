@@ -9,6 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 from smboost import HarnessAgent, InvariantSuite
+from smboost.harness.self_consistency_graph import (
+    SelfConsistencyTaskGraph,
+    execute_program_verifier,
+    run_tests_verifier,
+    tool_call_valid_verifier,
+)
 from smboost.llm.runtime import get_benchmark_llm_factory
 from smboost.tasks.completion import CompletionTaskGraph
 from smboost.tasks.emit_only_tool_calling import EmitOnlyToolCallingTaskGraph
@@ -28,6 +34,26 @@ _FLAGS: dict[str, dict[str, bool]] = {
 }
 
 
+def _self_consistency_verifier_for(task_graph_kind: str):
+    """Pick the built-in SelfConsistency verifier that matches the benchmark kind.
+
+    * ``completion``              -> :func:`run_tests_verifier` (HumanEval / LCB shape)
+    * ``tool_calling`` /
+      ``emit_only_tool_calling``  -> :func:`tool_call_valid_verifier` (BFCL)
+    * anything with
+      ``gsm8k`` in the name       -> :func:`execute_program_verifier`
+
+    Callers that want a custom verifier can bypass :func:`build_condition` and
+    instantiate :class:`SelfConsistencyTaskGraph` directly.
+    """
+    kind = (task_graph_kind or "").lower()
+    if "gsm8k" in kind:
+        return execute_program_verifier
+    if kind in {"tool_calling", "emit_only_tool_calling"}:
+        return tool_call_valid_verifier
+    return run_tests_verifier
+
+
 def build_condition(
     condition: str,
     *,
@@ -37,7 +63,26 @@ def build_condition(
 ) -> HarnessAgent:
     flags = _FLAGS[condition]  # raises KeyError for unknown condition
 
-    if task_graph_kind == "completion":
+    # C5 (self-consistency) overrides the per-kind task graph with the
+    # parallel-sample + program-verifier + majority-vote graph. The
+    # underlying per-kind invariant suite is kept so the outer HarnessGraph
+    # still enforces node-level invariants correctly.
+    if condition == "C5":
+        if task_graph_kind == "completion":
+            invariants = InvariantSuite.completion()
+        elif task_graph_kind == "tool_calling":
+            invariants = InvariantSuite.tool_calling()
+        elif task_graph_kind == "emit_only_tool_calling":
+            invariants = InvariantSuite.emit_only_tool_calling()
+        else:
+            raise ValueError(
+                f"unknown task_graph_kind: {task_graph_kind!r}; "
+                "must be 'completion', 'tool_calling', or 'emit_only_tool_calling'"
+            )
+        task_graph = SelfConsistencyTaskGraph(
+            verifier=_self_consistency_verifier_for(task_graph_kind),
+        )
+    elif task_graph_kind == "completion":
         task_graph = CompletionTaskGraph(grounded_verify=flags["grounded_verify"])
         invariants = InvariantSuite.completion()
     elif task_graph_kind == "tool_calling":
