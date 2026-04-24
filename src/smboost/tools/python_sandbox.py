@@ -161,7 +161,11 @@ class PythonSandbox:
             )
             try:
                 completed = subprocess.run(
-                    [self._python, "-I", "-c", preamble],
+                    # -I = isolated (no PYTHON* env, no user site, no cwd in path)
+                    # -S = skip `import site` (no system site-packages on path)
+                    # Combined, they guarantee the tool subprocess cannot reach
+                    # the harness's editable-install smboost package.
+                    [self._python, "-I", "-S", "-c", preamble],
                     capture_output=True,
                     text=True,
                     timeout=timeout_s,

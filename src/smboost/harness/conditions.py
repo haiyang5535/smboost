@@ -88,10 +88,16 @@ def build_condition(condition: str, **kwargs: Any) -> TaskGraph:
                 "It is authored by the parallel Agent 2 workstream; ensure that "
                 "worktree is merged before invoking build_condition('C5')."
             )
-        # Only pass kwargs the self-consistency graph consumes; unknown kwargs
-        # are filtered here to keep behaviour consistent with other branches.
         allowed = {"n_samples", "verifier", "verifier_kind", "base_task_graph"}
         filtered = {k: v for k, v in kwargs.items() if k in allowed}
+        # Agent 2's SelfConsistencyTaskGraph requires verifier=; if the caller
+        # didn't supply one, default to run_tests_verifier (code-tests path).
+        # Benchmark-level dispatch (benchmarks/conditions.py) picks a smarter
+        # verifier based on task_graph_kind; this src-level fallback is for
+        # bare build_condition("C5") calls (tests, notebooks, smoke scripts).
+        if "verifier" not in filtered:
+            from smboost.harness.self_consistency_graph import run_tests_verifier
+            filtered["verifier"] = run_tests_verifier
         return SelfConsistencyTaskGraph(**filtered)  # type: ignore[misc]
 
     # --- Agent 4 branch (C6) ------------------------------------------------

@@ -190,20 +190,39 @@ def test_runner_rejects_unknown_bench():
 def test_runner_gsm8k_raises_import_error_when_module_missing():
     """If Agent 3's gsm8k module isn't present, we must surface a clear error
     rather than silently passing or obscurely crashing."""
-    # Ensure no stale module hanging around from a prior test
-    sys.modules.pop("benchmarks.gsm8k", None)
-    sys.modules.pop("benchmarks.gsm8k.runner", None)
+    import benchmarks
+    saved_gsm8k = sys.modules.get("benchmarks.gsm8k")
+    saved_gsm8k_runner = sys.modules.get("benchmarks.gsm8k.runner")
+    saved_gsm8k_attr = getattr(benchmarks, "gsm8k", None)
+    try:
+        sys.modules.pop("benchmarks.gsm8k", None)
+        sys.modules.pop("benchmarks.gsm8k.runner", None)
+        if hasattr(benchmarks, "gsm8k"):
+            delattr(benchmarks, "gsm8k")
 
-    # Force ImportError by ensuring the submodule can't be found.
-    with patch.dict(sys.modules, {"benchmarks.gsm8k": None}):
-        with pytest.raises(ImportError) as excinfo:
-            run_external_baseline(
-                bench="gsm8k",
-                tasks=[{"task_id": "g1", "question": "1+1"}],
-                model="gpt-4o",
-                max_tokens=32,
-            )
-    assert "gsm8k" in str(excinfo.value).lower()
+        with patch.dict(sys.modules, {"benchmarks.gsm8k": None}):
+            with pytest.raises(ImportError) as excinfo:
+                run_external_baseline(
+                    bench="gsm8k",
+                    tasks=[{"task_id": "g1", "question": "1+1"}],
+                    model="gpt-4o",
+                    max_tokens=32,
+                )
+        assert "gsm8k" in str(excinfo.value).lower()
+    finally:
+        # Fully restore: patch.dict leaves sys.modules key set to None which
+        # poisons subsequent imports and also strands benchmarks.gsm8k = None
+        # on the parent module. Force a clean reimport by clearing both.
+        sys.modules.pop("benchmarks.gsm8k", None)
+        sys.modules.pop("benchmarks.gsm8k.runner", None)
+        if hasattr(benchmarks, "gsm8k"):
+            delattr(benchmarks, "gsm8k")
+        if saved_gsm8k is not None:
+            sys.modules["benchmarks.gsm8k"] = saved_gsm8k
+        if saved_gsm8k_runner is not None:
+            sys.modules["benchmarks.gsm8k.runner"] = saved_gsm8k_runner
+        if saved_gsm8k_attr is not None:
+            benchmarks.gsm8k = saved_gsm8k_attr
 
 
 # ---------------------------------------------------------------------------
