@@ -37,6 +37,14 @@ bench = [
     "requests>=2.31.0,<3.0",
     "human-eval>=1.0.3",
 ]
+# External-API baselines (benchmarks/external/): Claude Sonnet 4.6 / GPT-4o /
+# Llama-3-70B via OpenRouter.  `openai` is already used elsewhere (OpenAI-compat
+# llama.cpp path); we add `anthropic` for the Claude client.  Kept optional so
+# the main install doesn't pull a second LLM SDK.
+external = [
+    "anthropic>=0.40,<1.0",
+    "openai>=1.30,<3.0",
+]
 
 [build-system]
 requires = ["hatchling"]
