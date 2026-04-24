@@ -56,6 +56,9 @@ def _load_tasks_for_bench(bench: str, n: int) -> list[dict]:
     if bench == "bfcl_multi":
         from benchmarks.bfcl.loader import load_bfcl_tasks
         return load_bfcl_tasks(category="multiple_function", n=n)
+    if bench == "gsm8k":
+        from benchmarks.gsm8k.loader import load_tasks
+        return load_tasks(n)
     raise ValueError(f"unknown bench: {bench!r}")
 
 
@@ -146,6 +149,98 @@ def _run_humaneval_harness(
     ]
 
 
+def _run_gsm8k_raw(tasks: list[dict], model: str) -> list[dict]:
+    """Route to ``benchmarks.gsm8k.runner.run_baseline`` with the standard
+    CSV-shaped row dict; scorer tags ``bench="gsm8k"`` already."""
+    from benchmarks.gsm8k.runner import run_baseline
+
+    # Honor SMBOOST_OPENAI_MAX_TOKENS if set, else 512 (plenty for CoT).
+    try:
+        max_tokens = int(os.environ.get("SMBOOST_OPENAI_MAX_TOKENS", "512"))
+    except ValueError:
+        max_tokens = 512
+    return run_baseline(tasks, model, max_tokens=max_tokens)
+
+
+def _run_gsm8k_harness(
+    tasks: list[dict], condition: str, model: str
+) -> list[dict]:
+    """Run GSM8K through a C1/C4/C5/C6 harness condition.
+
+    Uses ``task_graph_kind="completion"`` because GSM8K final-answer
+    emission is plain text generation; retries benefit from the same
+    grounded-verify / session-memory plumbing HumanEval uses. Verifier
+    extension to a Prove-style numeric check is left to the self-consistency
+    agent (C5) — for now the harness's default verifier falls back to
+    AST-only on non-Python content, then the runner re-scores via our
+    ``scorer.score`` on the final generate output.
+
+    ``task_metadata`` carries ``expected_answer`` so a future grounded
+    verifier (hooked in ``completion.py``) can check numeric equality
+    without the scorer loop duplicating state.
+    """
+    from benchmarks.conditions import build_condition
+
+    results: list[dict] = []
+    for t in tasks:
+        agent = build_condition(
+            condition=condition, model=model, task_graph_kind="completion"
+        )
+        task_metadata = {
+            "testtype": "gsm8k",
+            "task_id": t["task_id"],
+            "question": t["question"],
+            "expected_answer": t["expected_answer"],
+        }
+        from benchmarks.gsm8k.prompt import build_prompt
+        prompt = build_prompt(t["question"])
+        run = agent.run(
+            prompt,
+            task_metadata=task_metadata,
+            task_id=t["task_id"],
+            condition=condition,
+        )
+        generate_output = ""
+        for step in run.trace:
+            if step.node == "generate":
+                generate_output = step.output
+        results.append(
+            {
+                "task_id": t["task_id"],
+                "completion": generate_output,
+                "expected_answer": t["expected_answer"],
+                "latency_s": run.stats.total_latency_s,
+                "retries": run.stats.retry_count,
+            }
+        )
+
+    from benchmarks.gsm8k.scorer import score
+
+    rows: list[dict] = []
+    for r in results:
+        passed = score(r["completion"], r["expected_answer"])
+        rows.append(
+            {
+                "task_id": r["task_id"],
+                "model": model,
+                "mode": condition,
+                "completion": r["completion"],
+                "expected_answer": r["expected_answer"],
+                "passed": 1 if passed else 0,
+                "passed_heval": 0,
+                "passed_heval_plus": 0,
+                "retries": r["retries"],
+                "latency_s": r["latency_s"],
+                "bench": "gsm8k",
+                "failure_bucket": "PASS" if passed else (
+                    "no_numeric_answer" if not (r["completion"] or "").strip()
+                    else "wrong_answer"
+                ),
+            }
+        )
+    return rows
+
+
 def _run_bfcl_raw_fn(tasks: list[dict], model: str) -> list[dict]:
     from benchmarks.bfcl.runner import run_bfcl_raw
 
@@ -175,6 +270,11 @@ def run_gate(cfg: GateConfig) -> list[dict]:
                 rows.extend(_run_bfcl_raw_fn(tasks, model))
             else:
                 rows.extend(_run_bfcl_harness_fn(tasks, mode, model))
+        elif cfg.bench == "gsm8k":
+            if mode == "raw":
+                rows.extend(_run_gsm8k_raw(tasks, model))
+            else:
+                rows.extend(_run_gsm8k_harness(tasks, mode, model))
         else:
             raise ValueError(f"unknown bench in GateConfig: {cfg.bench!r}")
     return rows
