@@ -66,6 +66,19 @@ class InvariantSuite:
         })
 
     @staticmethod
+    def real_tool() -> InvariantSuite:
+        """Invariants for the C6 real-tool graph (plan → call → verify).
+
+        plan and call must emit non-empty strings (they are JSON blobs).
+        verify is PASS/FAIL.
+        """
+        return InvariantSuite({
+            "plan":   ([], [output_is_nonempty]),
+            "call":   ([], [output_is_nonempty]),
+            "verify": ([], [output_is_nonempty, verify_says_pass]),
+        })
+
+    @staticmethod
     def emit_only_tool_calling() -> InvariantSuite:
         """Invariants for the emit-only tool-calling graph (BFCL).
 
