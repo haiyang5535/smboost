@@ -42,12 +42,51 @@ class _BenchmarkLlamaCppLocalFactory(LlamaCppLocalFactory):
 class _CompatibleChatOpenAI(ChatOpenAI):
     """Preserve top-level max_tokens for OpenAI-compatible local servers.
 
+    Also carries an optional ``grammar`` field through to the request body
+    as an OpenAI-API extension.  llama-cpp-python's OpenAI-compatible
+    server accepts ``grammar: <GBNF string>`` on ``/v1/chat/completions``
+    to constrain decoding.  Set ``grammar`` via the constructor or via
+    :meth:`with_grammar` — the plain OpenAI endpoint will simply ignore
+    it, so no-grammar behavior is unchanged.
+
     Warning:
         This class subclasses private LangChain API — ``_default_params`` and
         ``_get_request_payload``.  Tested against ``langchain-openai==1.1.x``.
         Because the API is private, the dependency in ``pyproject.toml`` is
         pinned to ``>=1.0,<2.0``; re-test before loosening the upper bound.
     """
+
+    # LangChain's pydantic config rejects unknown fields on the main
+    # schema; it would otherwise warn and stuff our grammar into
+    # ``model_kwargs`` (which would then be sent to the server as part
+    # of the body anyway — but without our awareness).  We pop
+    # ``grammar`` from kwargs before handing them to super().__init__
+    # and stash it via ``object.__setattr__`` to bypass pydantic's
+    # attribute guard.
+    def __init__(self, *args, grammar: str | None = None, **kwargs):
+        # Defensive: some callers may route grammar through
+        # ``model_kwargs={"grammar": "..."}``.  Normalise both paths.
+        if grammar is None:
+            mk = kwargs.get("model_kwargs")
+            if isinstance(mk, dict) and "grammar" in mk:
+                grammar = mk.pop("grammar")
+        super().__init__(*args, **kwargs)
+        object.__setattr__(self, "_grammar", grammar)
+
+    @property
+    def grammar(self) -> str | None:
+        return getattr(self, "_grammar", None)
+
+    def with_grammar(self, grammar: str | None) -> "_CompatibleChatOpenAI":
+        """Return a shallow copy with ``grammar`` replaced.
+
+        LangChain chat models are immutable by convention; this follows
+        the same pattern as ``.bind()`` — callers that want to toggle
+        grammar per-call should use this helper rather than mutating.
+        """
+        clone = self.__class__(**_extract_constructor_kwargs(self))
+        object.__setattr__(clone, "_grammar", grammar)
+        return clone
 
     @property
     def _default_params(self) -> dict[str, object]:
@@ -57,10 +96,38 @@ class _CompatibleChatOpenAI(ChatOpenAI):
         return params
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        # Allow per-call override via kwargs, else fall back to the
+        # instance's default grammar.
+        grammar = kwargs.pop("grammar", None)
+        if grammar is None:
+            grammar = self.grammar
+
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         if "max_completion_tokens" in payload:
             payload["max_tokens"] = payload.pop("max_completion_tokens")
+        if grammar is not None:
+            # llama-cpp-python server accepts this as an OpenAI
+            # extension.  Real OpenAI ignores unknown fields, so this is
+            # safe to leave in on non-local backends.
+            payload["grammar"] = grammar
         return payload
+
+
+def _extract_constructor_kwargs(instance: "_CompatibleChatOpenAI") -> dict[str, object]:
+    """Best-effort inverse of ``__init__`` for ``with_grammar`` cloning.
+
+    We pull the public knobs the factory set (``model``, ``base_url``,
+    ``api_key``, ``max_tokens``, ``temperature``) off the instance. This
+    mirrors how ``_cached_openai_factory`` constructs the object; if
+    additional knobs are added there, add them here too.
+    """
+    return {
+        "model": getattr(instance, "model_name", None) or getattr(instance, "model", None),
+        "base_url": str(getattr(instance, "openai_api_base", None) or ""),
+        "api_key": getattr(instance, "openai_api_key", None),
+        "max_tokens": getattr(instance, "max_tokens", None),
+        "temperature": getattr(instance, "temperature", None),
+    }
 
 
 @lru_cache(maxsize=None)
@@ -90,6 +157,7 @@ def _cached_openai_factory(
     api_key: str,
     max_tokens: int,
     temperature: float,
+    grammar: str | None = None,
 ) -> Callable[[str], object]:
     def _factory(model: str):
         return _CompatibleChatOpenAI(
@@ -98,6 +166,7 @@ def _cached_openai_factory(
             api_key=api_key,
             max_tokens=max_tokens,
             temperature=temperature,
+            grammar=grammar,
         )
 
     return _factory
