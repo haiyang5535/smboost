@@ -4,6 +4,12 @@ Reuses benchmarks/gates/runner.py machinery but runs one (model, mode) at a
 time so we persist to CSV after each mode finishes. Crash-safe: if the
 process dies mid-C4, we still have raw + C1 on disk.
 
+Stages:
+    - HE     : raw + C1 + C4 on HumanEval+
+    - BFCL   : raw + C1 on BFCL simple
+    - GSM8K  : raw + C1 on GSM8K math (harness sweet zone; C5/C6 added once
+               those agents merge)
+
 Notes
 -----
 * Raw HumanEval mode ignored `max_tokens` until 2026-04-23. When the
@@ -11,6 +17,8 @@ Notes
   can run away to the n_ctx limit, taking minutes per task. We now pass
   `max_tokens` (env `SMBOOST_OPENAI_MAX_TOKENS`, default 512) into the raw
   `ChatOpenAI` call via a monkey-patch of `run_humaneval.run_baseline`.
+* GSM8K raw mode already honors `SMBOOST_OPENAI_MAX_TOKENS` via
+  `benchmarks.gsm8k.runner._make_raw_llm`, so no patch needed there.
 """
 from __future__ import annotations
 
@@ -103,14 +111,16 @@ def _summary(rows: list[dict], label: str) -> None:
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--stage", required=True,
-                   choices=["HE", "BFCL"],
-                   help="HE = raw+C1+C4 on HumanEval; BFCL = raw+C1 on BFCL simple")
+                   choices=["HE", "BFCL", "GSM8K"],
+                   help="HE = raw+C1+C4 on HumanEval; BFCL = raw+C1 on BFCL simple; "
+                        "GSM8K = raw+C1 on GSM8K math")
     p.add_argument("--out-csv", required=True)
     p.add_argument("--model", default="qwen3.5:0.8b")
     p.add_argument("--modes", default=None,
-                   help="Comma-separated modes to run (default: raw,C1,C4 for HE; raw,C1 for BFCL)")
+                   help="Comma-separated modes to run (default: raw,C1,C4 for HE; "
+                        "raw,C1 for BFCL; raw,C1 for GSM8K)")
     p.add_argument("--n", type=int, default=None,
-                   help="Task count (default: 20 HE, 30 BFCL)")
+                   help="Task count (default: 20 HE, 30 BFCL, 50 GSM8K)")
     p.add_argument("--raw-max-tokens", type=int, default=None,
                    help="If set, pin ChatOpenAI.max_tokens for raw mode (default: env SMBOOST_OPENAI_MAX_TOKENS or 512)")
     args = p.parse_args()
@@ -121,10 +131,16 @@ def main() -> int:
         default_modes = ["raw", "C1", "C4"]
         bench = "humaneval_plus"
         default_n = 20
-    else:
+    elif args.stage == "BFCL":
         default_modes = ["raw", "C1"]
         bench = "bfcl_simple"
         default_n = 30
+    else:  # GSM8K
+        # Master plan: C5/C6 added once those agents merge. For this agent's
+        # slice we ship raw + C1, the same pattern BFCL uses pre-merge.
+        default_modes = ["raw", "C1"]
+        bench = "gsm8k"
+        default_n = 50
 
     modes = args.modes.split(",") if args.modes else default_modes
     n = args.n if args.n is not None else default_n
@@ -136,7 +152,8 @@ def main() -> int:
         except ValueError:
             raw_cap = 512
 
-    # Only patch for HE (BFCL raw has its own runner).
+    # Only patch for HE (BFCL + GSM8K raw runners already honor max_tokens
+    # via their own `_make_raw_llm` indirection).
     if args.stage == "HE" and "raw" in modes:
         _install_raw_max_tokens_patch(raw_cap)
 
