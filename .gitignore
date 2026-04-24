@@ -39,3 +39,7 @@ benchmarks/data/*.jsonl
 # BFCL downloaded cache (keep .gitkeep so directory is tracked)
 benchmarks/bfcl/data/*.jsonl
 !benchmarks/bfcl/data/.gitkeep
+
+# GSM8K downloaded cache (keep .gitkeep so directory is tracked)
+benchmarks/gsm8k/data/*.jsonl
+!benchmarks/gsm8k/data/.gitkeep

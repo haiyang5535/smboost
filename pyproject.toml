@@ -36,6 +36,8 @@ bench = [
     "evalplus>=0.3.0,<1.0",
     "requests>=2.31.0,<3.0",
     "human-eval>=1.0.3",
+    # GSM8K bench loader fetches openai/gsm8k via HuggingFace Datasets.
+    "datasets>=2.14",
 ]
 
 [build-system]
