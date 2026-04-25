@@ -221,47 +221,61 @@ def run_tests_verifier(completion: str, meta: dict) -> VerifierResult:
     }
 
 
+_GSM8K_FINAL_ANSWER_RE = re.compile(r"####\s*(-?\d+(?:\.\d+)?)")
+
+
+def _coerce_numeric(s: str) -> int | float | None:
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    return int(v) if v.is_integer() else v
+
+
 def execute_program_verifier(completion: str, meta: dict) -> VerifierResult:
     """Verifier for GSM8K-style math tasks.
 
-    Strategy: extract a Python program from the completion, run it in a
-    subprocess, parse the last number printed to stdout as the answer.
-    ``meta`` is currently unused; it's accepted to keep the verifier
-    signature uniform.
+    Two-tier extraction:
+    1. If the completion contains a Python code block, try running it and
+       parsing the last number on stdout. This is the Prove pattern from
+       ArXiv 2410.12608 — running code as the verifier.
+    2. Otherwise, look for the canonical GSM8K final-answer marker
+       "#### <number>" in the prose. This works for plain CoT prompts
+       ("Let's think step by step. ... #### 42").
 
-    Returns ``{"valid": bool, "extracted_answer": float | None}``.
+    Either path produces a numeric extracted_answer used for majority vote.
+    ``meta`` is unused; signature kept uniform across verifiers.
+
+    Returns ``{"valid": bool, "extracted_answer": int|float|None}``.
     """
     _ = meta
-    code = _strip_to_code(completion or "")
-    if not code.strip():
-        return {"valid": False, "extracted_answer": None, "trace": "empty completion"}
+    completion = completion or ""
+    code = _strip_to_code(completion)
 
-    result = _run_python_subprocess(code)
-    if not result["ok"]:
-        return {
-            "valid": False,
-            "extracted_answer": None,
-            "trace": (result["stderr"] or "")[-400:],
-        }
+    # Tier 1: program execution (when the model emitted Python code)
+    if code.strip():
+        result = _run_python_subprocess(code)
+        if result["ok"]:
+            stdout = result["stdout"].strip()
+            if stdout:
+                matches = _NUMBER_RE.findall(stdout)
+                if matches:
+                    answer = _coerce_numeric(matches[-1])
+                    if answer is not None:
+                        return {"valid": True, "extracted_answer": answer,
+                                "trace": "program-exec"}
 
-    stdout = result["stdout"].strip()
-    if not stdout:
-        return {"valid": False, "extracted_answer": None, "trace": "no stdout"}
+    # Tier 2: extract "#### <N>" marker from prose (CoT format)
+    final = _GSM8K_FINAL_ANSWER_RE.findall(completion)
+    if final:
+        # Last marker wins (handles few-shot contamination)
+        answer = _coerce_numeric(final[-1])
+        if answer is not None:
+            return {"valid": True, "extracted_answer": answer,
+                    "trace": "marker-extracted"}
 
-    matches = _NUMBER_RE.findall(stdout)
-    if not matches:
-        return {"valid": False, "extracted_answer": None, "trace": "no numeric output"}
-
-    last = matches[-1]
-    try:
-        answer: float | int = float(last)
-        # Prefer int when exact
-        if answer.is_integer():
-            answer = int(answer)
-    except ValueError:  # pragma: no cover - regex guarantees numeric
-        return {"valid": False, "extracted_answer": None, "trace": f"bad number: {last}"}
-
-    return {"valid": True, "extracted_answer": answer, "trace": ""}
+    return {"valid": False, "extracted_answer": None,
+            "trace": "no extractable numeric answer"}
 
 
 def tool_call_valid_verifier(completion: str, meta: dict) -> VerifierResult:
@@ -537,21 +551,43 @@ class SelfConsistencyTaskGraph(TaskGraph):
     def _default_prompt_builder(state: "HarnessState", _sample_idx: int) -> str:
         return state["task"]
 
+    def _sampling_llm(self, llm: "ChatOpenAI") -> "ChatOpenAI":
+        """Build a sibling LLM that hits the same backend with temperature
+        ``sampling_temperature`` instead of the cached factory's pinned value.
+
+        The cached factory's temperature is fixed at construction (it's a
+        ChatOpenAI model field, not a request param). Without this, every
+        sample comes back identical under temperature=0 and majority vote
+        provides no signal. We construct a fresh _CompatibleChatOpenAI with
+        the same backend params and a different temperature.
+        """
+        if self._sampling_temperature == getattr(llm, "temperature", None):
+            return llm
+        try:
+            from smboost.llm.runtime import _CompatibleChatOpenAI
+            sibling = _CompatibleChatOpenAI(
+                model=getattr(llm, "model", "qwen3.5:2b"),
+                base_url=getattr(llm, "openai_api_base", None) or
+                         getattr(llm, "base_url", None),
+                api_key=getattr(llm, "openai_api_key", None) or
+                        getattr(llm, "api_key", None),
+                temperature=self._sampling_temperature,
+                max_tokens=getattr(llm, "max_tokens", None),
+            )
+            return sibling
+        except Exception:
+            # Fallback: return the original LLM. Diversity will be limited
+            # but C5 will still vote on whatever samples come back.
+            return llm
+
     def _sample_parallel(self, state: "HarnessState", llm: "ChatOpenAI") -> list[str]:
         prompts = [self._prompt_builder(state, i) for i in range(self._n_samples)]
+        sampling_llm = self._sampling_llm(llm)
 
         def _one(idx_prompt: tuple[int, str]) -> str:
             _, prompt = idx_prompt
             try:
-                # Try to pass per-call temperature (best-effort; silently
-                # ignored by backends that don't support it).
-                try:
-                    msg = llm.invoke(
-                        [HumanMessage(content=prompt)],
-                        temperature=self._sampling_temperature,
-                    )
-                except TypeError:
-                    msg = llm.invoke([HumanMessage(content=prompt)])
+                msg = sampling_llm.invoke([HumanMessage(content=prompt)])
             except Exception as exc:
                 return f"<<sampling_error: {type(exc).__name__}: {exc}>>"
             content = getattr(msg, "content", "")
