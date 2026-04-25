@@ -105,7 +105,8 @@ def _run_humaneval_harness(
     results: list[dict] = []
     for t in tasks:
         agent = build_condition(
-            condition=condition, model=model, task_graph_kind="completion"
+            condition=condition, model=model, task_graph_kind="completion",
+            bench="humaneval_plus",
         )
         task_metadata = {
             "testtype": "humaneval",
@@ -184,7 +185,8 @@ def _run_gsm8k_harness(
     results: list[dict] = []
     for t in tasks:
         agent = build_condition(
-            condition=condition, model=model, task_graph_kind="completion"
+            condition=condition, model=model, task_graph_kind="completion",
+            bench="gsm8k",
         )
         task_metadata = {
             "testtype": "gsm8k",

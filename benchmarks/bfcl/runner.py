@@ -120,6 +120,7 @@ def run_bfcl_harness(
             model=model,
             task_graph_kind="emit_only_tool_calling",
             tools=t["functions"],  # BFCL functions already in tool-schema shape
+            bench="bfcl_simple",
         )
         result = agent.run(t["question"])
         predicted = _parse_raw_call(result.output or "")

@@ -34,18 +34,27 @@ _FLAGS: dict[str, dict[str, bool]] = {
 }
 
 
-def _self_consistency_verifier_for(task_graph_kind: str):
-    """Pick the built-in SelfConsistency verifier that matches the benchmark kind.
+def _self_consistency_verifier_for(task_graph_kind: str, *, bench: str | None = None):
+    """Pick the built-in SelfConsistency verifier that matches the benchmark.
 
-    * ``completion``              -> :func:`run_tests_verifier` (HumanEval / LCB shape)
-    * ``tool_calling`` /
-      ``emit_only_tool_calling``  -> :func:`tool_call_valid_verifier` (BFCL)
-    * anything with
-      ``gsm8k`` in the name       -> :func:`execute_program_verifier`
+    Resolution order:
+    1. Explicit ``bench`` (``"gsm8k"``, ``"humaneval_plus"``, ``"bfcl_simple"``)
+       — preferred, the gate runner knows the bench.
+    2. ``task_graph_kind`` substring fallback:
+       * ``completion``              -> :func:`run_tests_verifier`
+       * ``tool_calling`` /
+         ``emit_only_tool_calling``  -> :func:`tool_call_valid_verifier`
+       * anything with ``gsm8k``     -> :func:`execute_program_verifier`
 
     Callers that want a custom verifier can bypass :func:`build_condition` and
     instantiate :class:`SelfConsistencyTaskGraph` directly.
     """
+    bench_l = (bench or "").lower()
+    if "gsm8k" in bench_l:
+        return execute_program_verifier
+    if "bfcl" in bench_l:
+        return tool_call_valid_verifier
+    # bench unspecified or HumanEval+: fall through to task_graph_kind heuristic
     kind = (task_graph_kind or "").lower()
     if "gsm8k" in kind:
         return execute_program_verifier
@@ -60,6 +69,7 @@ def build_condition(
     model: str,
     task_graph_kind: str,
     tools: list[Any] | None = None,
+    bench: str | None = None,
 ) -> HarnessAgent:
     flags = _FLAGS[condition]  # raises KeyError for unknown condition
 
@@ -80,7 +90,7 @@ def build_condition(
                 "must be 'completion', 'tool_calling', or 'emit_only_tool_calling'"
             )
         task_graph = SelfConsistencyTaskGraph(
-            verifier=_self_consistency_verifier_for(task_graph_kind),
+            verifier=_self_consistency_verifier_for(task_graph_kind, bench=bench),
         )
     elif task_graph_kind == "completion":
         task_graph = CompletionTaskGraph(grounded_verify=flags["grounded_verify"])
