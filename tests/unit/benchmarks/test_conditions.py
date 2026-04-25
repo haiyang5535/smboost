@@ -25,10 +25,13 @@ def test_c4_plain_has_all_four_flags_off():
     assert agent.scorer_enabled is False
 
 
-def test_c5_minus_shrinkage_keeps_others_on():
+def test_c5_self_consistency_disables_shrinkage_and_grounded_verify():
+    # C5 runs its own program verifier inside SelfConsistencyTaskGraph; the
+    # outer HarnessGraph grounded_verify retry is redundant and just 3-4x's
+    # the latency without changing the answer, so it's off.
     agent = build_condition("C5", model="qwen3.5:2b", task_graph_kind="completion")
     assert agent.shrinkage_enabled is False
-    assert agent.grounded_verify is True
+    assert agent.grounded_verify is False
     assert agent.session_memory is True
     assert agent.scorer_enabled is True
 

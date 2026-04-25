@@ -29,7 +29,7 @@ _FLAGS: dict[str, dict[str, bool]] = {
     "C2": dict(grounded_verify=False, session_memory=True,  shrinkage_enabled=True,  scorer_enabled=True),
     "C3": dict(grounded_verify=True,  session_memory=False, shrinkage_enabled=True,  scorer_enabled=True),
     "C4": dict(grounded_verify=False, session_memory=False, shrinkage_enabled=False, scorer_enabled=False),
-    "C5": dict(grounded_verify=True,  session_memory=True,  shrinkage_enabled=False, scorer_enabled=True),
+    "C5": dict(grounded_verify=False, session_memory=True,  shrinkage_enabled=False, scorer_enabled=True),
     "C6": dict(grounded_verify=True,  session_memory=True,  shrinkage_enabled=True,  scorer_enabled=False),
 }
 
