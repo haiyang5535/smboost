@@ -146,6 +146,13 @@ def _generate_node(state: HarnessState, llm) -> str:
             prompt = "Python stdin/stdout solution:\n\n" + task[:600]
         else:
             prompt = task[:400]
+    elif testtype == "gsm8k":
+        # GSM8K is a math word problem. The runner already passes the fully
+        # rendered prompt (build_prompt(question)). Shrinkage levels keep the
+        # same prompt — switching to code-completion phrasing or truncation
+        # would only push the model into code mode and hurt accuracy. Retry
+        # diversification comes from session_memory hints prepended below.
+        prompt = task
     elif testtype == "functional" and entry_point:
         # Give a complete stub with `pass` so the model only replaces the body,
         # not the signature. Small models ignore "use EXACTLY this signature"
@@ -194,19 +201,30 @@ def _generate_node(state: HarnessState, llm) -> str:
                 f"Previous attempts failed with:\n{hints}\nFix the specific issue.\n\n"
                 + prompt
             )
-        cross = mem.find_similar(
-            task_id=task_id,
-            prompt=task,
-            error_class=recent[0].error_class if recent else "",
-        ) if task_id else None
-        if cross is not None:
-            prompt = (
-                f"A previous different task failed similarly with {cross.error_class}. "
-                f"Avoid the same pattern.\n\n" + prompt
-            )
+        # Cross-task hint only fires AFTER an in-task failure (recent != []).
+        # Otherwise the first attempt of every task gets a "previous different
+        # task failed similarly" prefix as soon as any earlier task has logged
+        # a failure — that's pure prompt pollution, not transfer learning, and
+        # it caused C1 first-attempt to diverge from raw on GSM8K (where the
+        # same vocabulary across problems clears the jaccard threshold).
+        if recent and testtype != "gsm8k":
+            cross = mem.find_similar(
+                task_id=task_id,
+                prompt=task,
+                error_class=recent[0].error_class,
+            ) if task_id else None
+            if cross is not None:
+                prompt = (
+                    f"A previous different task failed similarly with {cross.error_class}. "
+                    f"Avoid the same pattern.\n\n" + prompt
+                )
 
-    # /no_think disables Qwen3's extended thinking mode so the model responds directly
-    raw = llm.invoke([HumanMessage(content="/no_think\n\n" + prompt)]).content or ""
+    # /no_think disables Qwen3's extended thinking mode so code tasks respond
+    # directly. Skip it for GSM8K so the harness uses the same chat-template
+    # behavior as the raw runner — otherwise C1 first-attempt diverges from
+    # raw on tasks raw gets right, costing absolute pass rate.
+    prefix = "" if testtype == "gsm8k" else "/no_think\n\n"
+    raw = llm.invoke([HumanMessage(content=prefix + prompt)]).content or ""
     cleaned = _clean(raw)
     if testtype == "stdin" and _is_small_model(model) and not _looks_like_python_program(cleaned):
         return ""
