@@ -520,6 +520,30 @@ def _verify_grounded(state: HarnessState, _llm) -> str:
                 first_assertion=first_assertion,
                 prompt_used=state["task"],
             )
+    elif testtype == "gsm8k":
+        expected = meta.get("expected_answer", "")
+        if not expected:
+            return _verify_ast_only(state, _llm)
+        from benchmarks.gsm8k.scorer import extract_answer
+        got = extract_answer(completion)
+        if got is not None and str(got) == str(expected).strip():
+            result = {"passed": True, "traceback": "", "stdout": ""}
+        else:
+            tb = f"WrongAnswer: expected {expected!r}, got {got!r}"
+            result = {"passed": False, "traceback": tb}
+        mem = _ACTIVE_MEMORY.get()
+        task_id = meta.get("task_id", "")
+        if not result["passed"] and mem is not None and task_id:
+            mem.record(
+                task_id=task_id,
+                node="verify",
+                attempt=len(state["step_outputs"]),
+                error_class="WrongAnswer",
+                error_line=f"expected={expected}",
+                traceback_tail=result.get("traceback", "")[-800:],
+                first_assertion="",
+                prompt_used=state["task"],
+            )
     elif testtype == "stdin":
         test_cases = meta.get("test_cases", [])
         if not test_cases:

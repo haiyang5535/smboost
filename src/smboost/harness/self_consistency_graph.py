@@ -581,13 +581,22 @@ class SelfConsistencyTaskGraph(TaskGraph):
             return llm
 
     def _sample_parallel(self, state: "HarnessState", llm: "ChatOpenAI") -> list[str]:
-        prompts = [self._prompt_builder(state, i) for i in range(self._n_samples)]
-        sampling_llm = self._sampling_llm(llm)
+        """Sample n_samples completions; first one is the deterministic raw
+        sample (temperature=0), the rest are diverse at sampling_temperature.
 
-        def _one(idx_prompt: tuple[int, str]) -> str:
-            _, prompt = idx_prompt
+        Why: with all samples at the same high temperature, majority vote on
+        unique-answer cases ties to the *first* sample by index — which is
+        random under temp>0 and unrelated to the model's strongest belief.
+        Putting raw at index 0 makes the no-consensus fallback equal to "what
+        the model would have answered with raw decoding," so C5 is at least
+        as good as raw on weak-signal tasks instead of drifting.
+        """
+        prompts = [self._prompt_builder(state, i) for i in range(self._n_samples)]
+        diverse_llm = self._sampling_llm(llm)
+
+        def _invoke(used_llm: "ChatOpenAI", prompt: str) -> str:
             try:
-                msg = sampling_llm.invoke([HumanMessage(content=prompt)])
+                msg = used_llm.invoke([HumanMessage(content=prompt)])
             except Exception as exc:
                 return f"<<sampling_error: {type(exc).__name__}: {exc}>>"
             content = getattr(msg, "content", "")
@@ -597,9 +606,15 @@ class SelfConsistencyTaskGraph(TaskGraph):
 
         if self._n_samples == 1:
             # Avoid thread-pool overhead for n=1 (useful for tests / degenerate runs)
-            return [_one((0, prompts[0]))]
+            return [_invoke(llm, prompts[0])]
 
-        # Thread pool keeps HTTP calls to llama.cpp concurrent.
+        # Sample 0 is raw (temp=0 cached LLM). Samples 1..n-1 use the diverse
+        # sibling at sampling_temperature. Run all in a thread pool.
+        def _one(idx_prompt: tuple[int, str]) -> str:
+            idx, prompt = idx_prompt
+            used = llm if idx == 0 else diverse_llm
+            return _invoke(used, prompt)
+
         with ThreadPoolExecutor(max_workers=self._n_samples) as pool:
             return list(pool.map(_one, list(enumerate(prompts))))
 

@@ -246,7 +246,7 @@ def main() -> int:
     if existing:
         print(f"[matrix] {len(existing)} cells already present; skipping those", flush=True)
 
-    tmp_csv = Path("/tmp/matrix_cell.csv")
+    tmp_csv = Path(f"/tmp/matrix_cell_{os.getpid()}.csv")
 
     # Local model cells
     for bench in benches:

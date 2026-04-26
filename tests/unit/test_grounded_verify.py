@@ -159,3 +159,38 @@ def test_verify_humaneval_testtype_falls_back_when_metadata_incomplete():
     )
     result = graph.get_node_fn("verify")(state, MagicMock())
     assert result == "PASS"  # ast-only fallback
+
+
+def test_verify_gsm8k_pass_with_marker():
+    """testtype='gsm8k' should call gsm8k.scorer.extract_answer on the completion
+    prose and PASS when it matches expected_answer."""
+    graph = CompletionTaskGraph(grounded_verify=True)
+    state = _state(
+        "Janet eats 2, sells 4 at $3 each = $12 per day. Over 7 days: $84.\n#### 84",
+        {"testtype": "gsm8k", "task_id": "gsm8k/0", "expected_answer": "84"},
+    )
+    result = graph.get_node_fn("verify")(state, MagicMock())
+    assert result == "PASS"
+
+
+def test_verify_gsm8k_fail_with_wrong_answer():
+    graph = CompletionTaskGraph(grounded_verify=True)
+    state = _state(
+        "Some calculation... #### 92",
+        {"testtype": "gsm8k", "task_id": "gsm8k/0", "expected_answer": "84"},
+    )
+    result = graph.get_node_fn("verify")(state, MagicMock())
+    assert result.startswith("FAIL")
+    assert "WrongAnswer" in result
+
+
+def test_verify_gsm8k_falls_back_when_expected_missing():
+    """Missing expected_answer should fall back to AST-only (no false-positive PASS)."""
+    graph = CompletionTaskGraph(grounded_verify=True)
+    # Prose isn't valid Python → AST-only fallback returns FAIL on syntax error.
+    state = _state(
+        "Some prose... #### 84",
+        {"testtype": "gsm8k", "task_id": "gsm8k/0"},  # no expected_answer
+    )
+    result = graph.get_node_fn("verify")(state, MagicMock())
+    assert result.startswith("FAIL")  # AST-only rejects prose

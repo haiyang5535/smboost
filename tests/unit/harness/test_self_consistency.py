@@ -463,3 +463,68 @@ def test_build_condition_C5_picks_run_tests_verifier_for_completion():
 def test_step_output_dataclass_still_importable():
     s = StepOutput(node="generate", model="qwen3.5:2b", output="x", confidence=1.0, passed=True)
     assert s.node == "generate"
+
+
+# ---------------------------------------------------------------------------
+# raw-anchored sampling (sample 0 deterministic, others diverse)
+# ---------------------------------------------------------------------------
+
+
+def test_sample_parallel_uses_raw_llm_for_sample_zero_only():
+    """Sample 0 must use the cached deterministic LLM; samples 1..n-1 use the
+    diverse sibling. This prevents drift on weak-signal tasks where majority
+    vote ties to first sample by index — without anchoring, that "first" is
+    a random temp=0.7 sample, losing the model's strongest belief.
+    """
+    raw_calls: list[str] = []
+    diverse_calls: list[str] = []
+
+    def _make_recording_llm(record: list[str], content: str):
+        def _invoke(_messages, **_kwargs):
+            record.append(content)
+            msg = MagicMock()
+            msg.content = content
+            return msg
+        m = MagicMock()
+        m.invoke.side_effect = _invoke
+        m.temperature = 0.0
+        m.model = "qwen3.5:2b"
+        return m
+
+    raw_llm = _make_recording_llm(raw_calls, "RAW#### 1")
+    diverse_llm = _make_recording_llm(diverse_calls, "DIV#### 2")
+
+    tg = SelfConsistencyTaskGraph(
+        verifier=lambda s, m: {"valid": True, "extracted_answer": s},
+        n_samples=4,
+        sampling_temperature=0.7,
+    )
+    # Bypass _sampling_llm sibling construction by injecting our diverse llm.
+    tg._sampling_llm = lambda _llm: diverse_llm  # type: ignore[assignment]
+
+    samples = tg._sample_parallel(_make_state(), raw_llm)
+
+    assert len(samples) == 4
+    # Sample 0 must come from raw_llm exactly once.
+    assert len(raw_calls) == 1
+    # Samples 1..3 (3 of them) must come from diverse_llm.
+    assert len(diverse_calls) == 3
+    # Order matters: sample 0 is the raw one, samples 1..3 are diverse.
+    assert samples[0] == "RAW#### 1"
+    assert all(s == "DIV#### 2" for s in samples[1:])
+
+
+def test_majority_vote_tie_breaks_to_sample_zero():
+    """When all samples have unique answers (no consensus), the winner falls
+    back to sample 0 — which under our raw-anchored sampling is the
+    deterministic raw output, so C5 ≥ raw on weak-signal tasks.
+    """
+    from smboost.harness.self_consistency_graph import majority_vote
+
+    samples = ["raw_answer_1", "div_answer_2", "div_answer_3", "div_answer_4", "div_answer_5"]
+    results = [{"valid": True, "extracted_answer": i} for i in range(5)]
+    winner, answer, valid_count, vote_count = majority_vote(samples, results)
+    assert winner == "raw_answer_1"
+    assert answer == 0
+    assert valid_count == 5
+    assert vote_count == 1
