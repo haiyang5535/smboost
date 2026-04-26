@@ -225,7 +225,18 @@ def _generate_node(state: HarnessState, llm) -> str:
     # raw on tasks raw gets right, costing absolute pass rate.
     prefix = "" if testtype == "gsm8k" else "/no_think\n\n"
     raw = llm.invoke([HumanMessage(content=prefix + prompt)]).content or ""
-    cleaned = _clean(raw)
+    if testtype == "gsm8k":
+        # Strip thinking blocks but DO NOT extract fenced ```python``` content:
+        # GSM8K answers live in prose ("... so the answer is 84\n#### 84") and
+        # the canonical "#### N" marker sits outside any code block the model
+        # might use mid-reasoning. _clean() would strip the prose and leave
+        # only the (wrong) fenced code, hiding the actual answer from the
+        # scorer / verifier.
+        cleaned = _THINK_BLOCK.sub("", raw)
+        if "<think>" in cleaned:
+            cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL).strip()
+    else:
+        cleaned = _clean(raw)
     if testtype == "stdin" and _is_small_model(model) and not _looks_like_python_program(cleaned):
         return ""
     return cleaned
