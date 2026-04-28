@@ -1,8 +1,12 @@
 [project]
 name = "smboost"
 version = "0.1.0"
+description = "LangGraph decoding-time harness that lifts small open-weight models on verifier-friendly benchmarks (math, code with tests) via parallel self-consistency, per-sample program verifiers, and raw-anchored majority voting."
+readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
+keywords = ["llm", "small-language-model", "self-consistency", "langgraph", "evaluation", "benchmark", "qwen", "decoding"]
+authors = [{name = "Haiyang Wu"}]
 # Upper bounds: LangChain 1.x minors have been breaking (e.g. chat-model param
 # renames).  We also subclass private LangChain API in src/smboost/llm/runtime.py
 # (_CompatibleChatOpenAI overrides _default_params / _get_request_payload), so a
@@ -17,6 +21,10 @@ dependencies = [
     # no default cert bundle, so scripts/run_gates.py sets SSL_CERT_FILE via certifi.
     "certifi>=2024.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/haiyang5535/smboost"
+Issues = "https://github.com/haiyang5535/smboost/issues"
 
 [project.optional-dependencies]
 dev = [
