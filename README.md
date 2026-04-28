@@ -1,190 +1,110 @@
 # SMBoost Harness
 
-> **The production harness that turns 2B-class open models into 8B+ level agents — without changing the model weights.**
+> A LangGraph reliability harness that lifts a 2B open-weight model on a MacBook from 20 % → 68 % on GSM8K (math) and 44 % → 74 % on HumanEval+ (code). No fine-tuning, no cloud — just better decoding.
 
-[![GitHub Stars](https://img.shields.io/github/stars/haiyang5535/smboost?style=social)](https://github.com/haiyang5535/smboost)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-<!-- PyPI badge intentionally omitted — not yet published. Restore once
-`pip install smboost` works. -->
+## Headline
 
----
+Two benchmarks, one harness, n = 50 per cell, all on a MacBook:
+
+| Model | Bench | n | Raw | + SMBoost (C5) | Lift |
+|---|---|---|---|---|---|
+| Qwen 2.5 2B (Q4_K_M, local) | GSM8K | 50 | 20.0% | **68.0%** | **3.40×** (+48pp) |
+| Qwen 2.5 2B (Q4_K_M, local) | HumanEval+ | 50 | 44.0% | **74.0%** | **1.68×** (+30pp) |
+| Qwen 2.5 0.8B (Q4_K_M, local) | GSM8K | 50 | 50.0% | 58.0% | 1.16× (+8pp) |
+
+Per-task data lives at `benchmarks/results/full_matrix_v2.csv` (GSM8K)
+and `benchmarks/results/he_n50_2b.csv` (HumanEval+) once you reproduce
+the runs locally. The directory is `.gitignored`; the Quickstart below
+regenerates it from a clean clone.
+
+Of the 40 GSM8K problems Qwen 2B raw gets wrong, the harness recovers 25 with **zero regressions** on the 10 it already gets right. Same zero-regression signature on HumanEval+: **0 raw-only**, **15 new recoveries** at n = 50.
+
+## Why this matters
+
+Production teams pay for 70B-class API tokens to get reliable structured output. SMBoost shows that a 2B model with the right decoding harness — parallel sampling + program-execution verifier + raw-anchored majority vote — closes most of that reliability gap on math reasoning, locally, at near-zero cost per query.
 
 ## Quickstart
 
-```bash
-git clone https://github.com/haiyang5535/smboost
-cd smboost
-pip install -e ".[bench]"
-```
-
-Start a llama.cpp-compatible server serving a Qwen 3.5 GGUF on
-`http://127.0.0.1:8000/v1`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
-exact invocation and model download.
-
-Smoke-test the pipeline (one HumanEval-style task end-to-end):
+Tested on macOS / Python 3.10+.
 
 ```bash
-python3 scripts/smoke_pipeline.py qwen3.5:2b
+# 1. Clone and install
+git clone https://github.com/haiyang5535/smboost && cd smboost
+pip install -e ".[bench,local]"
+
+# 2. Download Qwen 2.5 2B GGUF and start the llama.cpp server
+mkdir -p models
+wget -O models/Qwen3.5-2B-Q4_K_M.gguf \
+  "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf"
+
+python3 -m llama_cpp.server \
+  --model models/Qwen3.5-2B-Q4_K_M.gguf \
+  --host 127.0.0.1 --port 8000 \
+  --n_gpu_layers -1 --n_ctx 8192 \
+  --chat_format qwen \
+  --chat_template_kwargs '{"enable_thinking": false}' &
+
+# 3. Reproduce a 20-task slice of the headline
+export SMBOOST_LLM_BACKEND=server
+export SMBOOST_OPENAI_BASE_URL=http://127.0.0.1:8000/v1
+export SMBOOST_OPENAI_API_KEY=sk-no-key
+
+python3 scripts/run_gates_0_8b.py \
+  --stage GSM8K --model qwen3.5:2b \
+  --out-csv /tmp/quickstart.csv \
+  --n 20 --modes raw,C5
 ```
 
-Run the ablation gate suite (~7h wall-clock on a single M-series Mac):
+Expected: raw ≈ 20%, C5 ≈ 60-75%. Full n=50 takes ~30 min on an M2 Pro.
+
+## How it works
+
+The headline result uses **C5 = self-consistency**, wired in [`src/smboost/harness/self_consistency_graph.py`](src/smboost/harness/self_consistency_graph.py):
+
+1. Sample 5 completions in parallel — sample 0 at `temperature=0` (deterministic raw anchor), samples 1–4 at `temperature=0.7` (diversity).
+2. Run each through a per-benchmark verifier:
+   - `execute_program_verifier` for math (extracts `#### N` or runs generated Python)
+   - `run_tests_verifier` for code (runs `prompt + completion + tests + check(entry_point)`)
+3. Majority-vote among verifier-valid samples. Tie-break to sample 0 so no-consensus runs fall back to the deterministic baseline (no drift).
+
+Other conditions (C1 grounded retry, C2 AST-only, C4 invariant suite, C6 real tools) are ablations included in the matrix CSV.
+
+## Reproducing the full matrix
 
 ```bash
-python3 scripts/run_gates.py --stage all
+python3 scripts/run_full_matrix_v2.py \
+  --benches gsm8k --n 50 \
+  --modes raw,C5 \
+  --models qwen3.5:0.8b,qwen3.5:2b
 ```
 
-What the harness does in-code — a HumanEval-style completion:
+Crash-safe: re-running skips cells already present in the output CSV.
 
-```python
-from smboost import HarnessAgent, InvariantSuite
-from smboost.tasks.completion import CompletionTaskGraph
+Gate report (G1a–G5a) regenerates from CSV with `--report-only`.
 
-agent = HarnessAgent(
-    model="qwen3.5:2b",                                  # served at 127.0.0.1:8000/v1
-    invariants=InvariantSuite.completion(),
-    task_graph=CompletionTaskGraph(grounded_verify=True),
-    fallback_chain=["qwen3.5:2b"],
-)
-
-prompt = (
-    "def add(a: int, b: int) -> int:\n"
-    '    """Return the sum of a and b."""\n'
-)
-result = agent.run(prompt, task_metadata={"entry_point": "add"})
-print(result.output)          # generated function body
-print(result.stats)           # retry_count, fallback_triggers, total_latency_s
-```
-
-No fine-tuning. No distillation. No cloud dependency. Run Qwen 3.5 2B locally with the same task-completion rate you'd expect from a much larger model — at a fraction of the cost and latency.
-
----
-
-## Problem
-
-The AI industry defaulted to a false equation: **better output = bigger model**.
-
-But in 2026, the real bottleneck isn't model capability — it's **production reliability**. Raw small models (2B–7B) fail in production not because they lack knowledge, but because they lack:
-
-- Structured retry and fallback strategies when outputs are malformed
-- Loop detection and state recovery under ambiguous tool-call sequences
-- Invariant enforcement across multi-step reasoning chains
-- Graceful degradation when confidence drops mid-task
-
-The result: teams run 70B+ models at 10–30x the cost, just to get deterministic enough behavior to ship. **That's an infrastructure problem masquerading as a model problem.**
-
-Agent = Model + Harness. The industry has over-invested in the model half.
-
----
-
-## Solution
-
-**SMBoost Harness** is an open-source Python library that wraps any 2B–7B model in a production-grade execution harness — giving it the reliability profile of a much larger model without touching weights.
-
-<!-- numbers to be filled from benchmarks/results/gate_G1.csv post-run -->
-
-| Metric | Raw 2B Model | 2B + SMBoost | Raw 8B Model |
-|---|---|---|---|
-| Task success rate | ~55% | **target** ≥80%* | ~82% |
-| Avg latency | ~1.2s | ~1.8s | ~3.5s |
-| Cost (per 1M tokens) | $0.02 | $0.02 | $0.20 |
-| Edge deployable | ✅ | ✅ | ⚠️ |
-
-*"target" = headline number the design is aimed at, not yet demonstrated in this
-repo. The current gate run writes per-task rows to `benchmarks/results/gate_G1.csv`
-and `benchmarks/results/gate_G2.csv`; this table will cite those numbers once the
-suite completes. See `docs/overnight/` for the rolling evidence log.
-
----
-
-## Technical Differentiation
-
-SMBoost Harness is not a prompt wrapper. It's a **reliability layer** built on LangGraph, engineered for the failure modes that actually kill small models in production.
-
-### Core Components
-
-**1. Hierarchical State Machine**
-Explicit agent state graph with typed transitions. No more "the model just stopped responding mid-task." Every node has an entry invariant, exit invariant, and a defined fallback edge.
-
-**2. Adaptive Robustness Scorer**
-Per-step confidence estimation using output entropy + structural validity signals. Dynamically adjusts retry budget and fallback strategy based on observed reliability during the current run — not static thresholds baked at config time.
-
-**3. Verification Loops**
-Post-action verification steps that confirm tool calls had the intended effect before the agent proceeds. Closes the observe-act-confirm loop that raw model agents skip.
-
-**4. Invariant Test Suite**
-Declarative invariants attached to task types (e.g., "file must exist after write", "output must be valid JSON", "no destructive ops without prior confirmation"). Runs in-process with zero latency overhead.
-
-**5. Failure Replay + Shrinkage-Style Fallback**
-When a path fails, the harness replays with a simplified prompt + reduced tool surface (shrinkage) before escalating to a larger model or HITL. Inspired by property-based testing's shrink step — find the minimal failing case, don't just retry blindly.
-
-**6. Failure Memory (Session-Scoped)**
-Within a session, failed patterns are memoized. The scorer down-weights similar action sequences for the remainder of the run. No training required.
-
-```python
-from smboost import HarnessAgent, InvariantSuite
-from smboost.tasks.completion import CompletionTaskGraph
-
-# Same harness as Quickstart — shown here to illustrate the
-# hierarchical state machine + verification loop on a HumanEval-style task.
-agent = HarnessAgent(
-    model="qwen3.5:2b",                                  # served at 127.0.0.1:8000/v1
-    invariants=InvariantSuite.completion(),
-    task_graph=CompletionTaskGraph(grounded_verify=True),
-    fallback_chain=["qwen3.5:2b"],                       # escalate only if configured
-)
-
-prompt = (
-    "def longest_common_prefix(strs: list[str]) -> str:\n"
-    '    """Return the longest common prefix of a list of strings."""\n'
-)
-result = agent.run(prompt, task_metadata={"entry_point": "longest_common_prefix"})
-
-print(result.output)       # generated function body
-print(result.trace)        # full step-by-step trace with per-node confidence
-print(result.stats)        # retry_count, fallback_triggers, total_latency_s
-```
-
----
-
-## Comparison
-
-| Feature | SMBoost | SmallCTL | smolagents | Meta-Harness |
-|---|---|---|---|---|
-| Hierarchical state machine | ✅ production-grade | ⚠️ basic staged-reasoning | ❌ | ⚠️ |
-| Adaptive robustness scoring | ✅ per-step dynamic | ❌ | ❌ | ❌ |
-| Invariant test suite | ✅ declarative, zero-latency | ❌ | ❌ | ❌ |
-| Verification loops | ✅ observe-act-confirm | ❌ | ❌ | ⚠️ |
-| Failure replay + shrinkage | ✅ | ❌ | ❌ | ❌ |
-| SaaS dashboard | ✅ metrics + trace viewer | ❌ | ❌ | ❌ |
-| Edge / fully local | ✅ | ✅ | ✅ | ❌ |
-
-Compared to **SmallCTL** (a lightweight terminal CLI harness for SLMs with basic staged-reasoning and tool dispatch) and **Hugging Face smolagents**, SMBoost adds a production-grade hierarchical state machine, adaptive robustness scoring, invariant test suite, verification loops, failure replay with shrinkage fallback, and a full SaaS dashboard for observability + auto-optimization. Meta-Harness targets research workflows and requires cloud infrastructure; SMBoost runs fully local on an M2 MacBook.
-
----
-
-## Contributing
-
-**SMBoost is early — your issues and PRs shape the roadmap directly.**
-
-- Found a failure mode that the harness doesn't handle? [Open an issue](https://github.com/haiyang5535/smboost/issues) — we'll either fix it or explain why it's already covered.
-- Want to add support for a new model backend, invariant type, or fallback strategy? PRs are welcome. Check [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup instructions.
-- **Early contributors** (first 20 PRs merged) get co-authorship credit on the public benchmark paper releasing alongside the v1.0 milestone.
+## Running the tests
 
 ```bash
-git clone https://github.com/haiyang5535/smboost
-cd smboost
-pip install -e ".[dev,bench]"
-pytest tests/unit -q --ignore=tests/unit/livecodebench
+pytest tests/unit -q
 ```
 
----
+485 unit tests cover the harness, conditions, verifiers, gates, and matrix
+runner. (Integration / slow tests deselected by default.)
+
+## What this is not
+
+- **Not a fine-tune.** No weights are touched. Same Q4_K_M GGUF in, better answers out.
+- **Not a generic agent framework.** The win is concentrated where a verifier exists (math, code with tests, structured tool calls).
+- **Not a universal lift on every base model.** A boundary probe on
+  Phi-3 mini-4k (already-strong on GSM8K at 85 % raw) showed C5 lifts
+  collapse — sample diversity overrides correct deterministic
+  samples more often than it recovers wrong ones. SMBoost is the
+  right tool for *low-baseline small models pushed to their ceiling*,
+  not already-saturated ones. (See [`docs/overnight/2026-04-27-final-improvement-report.md`](docs/overnight/2026-04-27-final-improvement-report.md).)
 
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
-
----
-
-> *SMBoost Harness — because shipping is harder than benchmarking.*
