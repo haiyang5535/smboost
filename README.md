@@ -198,6 +198,14 @@ slice that needs downloaded data) on every push.
   introduce sampling variance — the n=50 matrix is the smallest run
   size at which the lift signal stabilizes against that variance
 
+## Longer writeup
+
+For the full story — motivation, the C1–C6 ablation table, the
+ground-truth evaluation bug that changed every conclusion, the
+mechanism behind the zero-regression property, and the Phi-3
+boundary collapse — see [`docs/writeup.md`](docs/writeup.md)
+(~2 000 words).
+
 ## Prior art
 
 This is a from-scratch engineering implementation in the spirit of

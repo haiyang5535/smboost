@@ -1,10 +1,12 @@
 # Ignore all markdown files
 *.md
 
-# Except README.md, CONTRIBUTING.md, SECURITY.md
+# Except README.md, CONTRIBUTING.md, SECURITY.md, and the long-form
+# project writeup committed at docs/writeup.md
 !README.md
 !CONTRIBUTING.md
 !SECURITY.md
+!docs/writeup.md
 
 # Worktrees
 .worktrees/
