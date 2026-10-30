@@ -116,7 +116,7 @@ def _strip_to_code(raw: str) -> str:
     return cleaned
 
 
-_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
 
 def _run_python_subprocess(src: str, *, timeout: int = 8) -> dict:
@@ -221,11 +221,14 @@ def run_tests_verifier(completion: str, meta: dict) -> VerifierResult:
     }
 
 
-_GSM8K_FINAL_ANSWER_RE = re.compile(r"####\s*(-?\d+(?:\.\d+)?)")
+_GSM8K_FINAL_ANSWER_RE = re.compile(r"####\s*(-?\d[\d,]*(?:\.\d+)?)")
 
 
 def _coerce_numeric(s: str) -> int | float | None:
+    s = s.replace(",", "")
     try:
+        if "." not in s:
+            return int(s)
         v = float(s)
     except ValueError:
         return None
